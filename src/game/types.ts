@@ -10,7 +10,7 @@ export interface SkinDefinition {
   accentColor?: string;
 }
 
-export type GameStatus = 'idle' | 'playing' | 'gameover';
+export type GameStatus = 'idle' | 'playing' | 'paused' | 'gameover';
 
 export interface FishEntity {
   x: number;
