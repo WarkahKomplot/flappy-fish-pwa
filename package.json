@@ -1,7 +1,8 @@
 {
-  "name": "jerayawara",
+  "name": "flappy-fish-pwa",
   "private": true,
   "version": "1.0.0",
+  "description": "Underwater Flappy Bird clone Progressive Web App with fluid physics, 3-pearl bubble shields, and procedural Web Audio",
   "type": "module",
   "scripts": {
     "dev": "vite",

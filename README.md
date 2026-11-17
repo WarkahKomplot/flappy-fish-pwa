@@ -1,80 +1,98 @@
-# 🇲🇾 JerayaWara — Malaysia GPS Navigation PWA
+# 🌊 🐠 Flappy Fish — Deep Sea Arcade PWA
 
-> **JerayaWara** *(Sarawakian / Borneo Malay for "Roadway Voyager")* is a zero-cost, high-reliability Progressive Web App (PWA) built specifically for Malaysian roads across Peninsular Malaysia, Sabah, and Sarawak.
+> An underwater, offline-capable Progressive Web App (PWA) clone of *Flappy Bird* with fluid aquatic physics, a 3-Pearl Bubble Shield combo system, procedural Web Audio, and milestone skin unlocks.
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue?style=for-the-badge&logo=github)](https://warkahkomplot.github.io/JerayaWara/)
-[![Tests](https://img.shields.io/badge/Vitest-191%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/JerayaWara)
+[![Live Web App](https://img.shields.io/badge/Play%20Online-GitHub%20Pages-blue?style=for-the-badge&logo=github)](https://warkahkomplot.github.io/flappy-fish-pwa/)
+[![Tests](https://img.shields.io/badge/Vitest-339%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
+[![PWA](https://img.shields.io/badge/PWA-100%25%20Offline-cyan?style=for-the-badge)](https://warkahkomplot.github.io/flappy-fish-pwa/)
 [![License](https://img.shields.io/badge/License-MIT-amber?style=for-the-badge)](LICENSE)
 
-📱 **Live Web App**: [https://warkahkomplot.github.io/JerayaWara/](https://warkahkomplot.github.io/JerayaWara/)
+📱 **Play Live**: [https://warkahkomplot.github.io/flappy-fish-pwa/](https://warkahkomplot.github.io/flappy-fish-pwa/)
 
 ---
 
-> [!NOTE]
-> **Online-First with Offline Resilience**  
-> JerayaWara is primarily an **online turn-by-turn navigation engine** powered by dual-mirror routing servers. To guarantee reliability when driving across Malaysian cellular dead zones (Karak Highway, Genting Sempah, East-West Highway, rural trunk roads), it runs an aggressive **offline resilience shield** that pre-caches route map tiles, dead-reckons inside tunnels, and auto-recovers active trips across browser tab reloads or memory pressure.  
-> *Built as a focused personal tool for small groups (~10 users) with zero ads, tracking, or API subscription fees.*
+## 🎮 Gameplay & Mechanics
+
+Instead of rigid gravity flaps and green pipes, **Flappy Fish** plunges you into a glowing deep-sea trench with fluid swimming physics and high-dopamine risk/reward:
+
+* **🏊 Fluid Aquatic Physics:** Gentle downward buoyancy with smooth water drag damping. Tap to deliver a snappy forward/upward tail propulsion; fish pitches dynamically (-20° swim stroke, +45° descent).
+* **🛡️ 3-Pearl Bubble Shield Combo:** Hazardous gaps between swaying kelp and drifting jellyfish have a ~60% chance of spawning glowing golden pearls. Collecting **3 consecutive pearls** unleashes an iridescent **Bubble Shield** that absorbs 1 collision and grants a 1.2s blinking grace period.
+* **🚩 In-Water "Personal Best" Ribbon:** A visible floating ribbon banner (`🏆 BEST: X`) appears in the water at your all-time high score. Crossing it triggers a celebratory confetti burst and triumphant fanfare!
+* **🐠 Milestone Skin Wardrobe:** Pearls are never lost upon game over—they deposit into your permanent lifetime bank to unlock cosmetic companions:
+  * **Neon Tetra:** Bioluminescent cyan silhouette with electric blue fins *(Default)*.
+  * **Clownfish:** Warm orange with 3 vertical curved white stripes *(Unlocked at 50 Lifetime Pearls)*.
+  * **Golden Manta:** Graceful diamond ray with harmonic wing flutter *(Unlocked at 150 Lifetime Pearls)*.
+* **⚡ 0.2-Second Frictionless Restart:** Instant tap-anywhere on death restarts your swim immediately. Zero ads, zero countdowns, zero loading screens.
+* **🎯 Generous Hitboxes:** Collision hitboxes are sized ~15% smaller than the visible sprites (`0.85x`), guaranteeing fair "near-miss" satisfaction without annoying grazing deaths.
 
 ---
 
-## 🌟 Key Features
+## 🔊 Procedural Web Audio API
 
-### 🌐 1. Online Navigation (Main Function)
-* **Redundant Multi-Mirror Routing**: Live turn-by-turn routing with automatic millisecond failover between OSRM primary and `routing.openstreetmap.de` mirrors, preventing dropouts.
-* **Turn-by-Turn Audio & Lane Guidance**: Bilingual (Bahasa Melayu & English) voice directions, highway exit numbers, and Malaysian dedicated motorcycle lane (*Lorong Motosikal*) callouts.
-* **Live Traffic Adjustments**: Corridor congestion monitoring with motorcycle lane-filtering ETA adjustments and expressway CCTV snapshots.
-
-### 🛡️ 2. Offline Resilience Shield (Safety Net)
-* **Corridor Tile Pre-caching**: Upon pressing *Start Navigation*, map tiles along the route corridor (zoom 14–16) are pre-fetched into a dedicated Service Worker cache (`jerayawara-tiles-v1`), eliminating blank grey grids in dead zones.
-* **Tunnel Dead-Reckoning Engine**: Smoothly projects vehicle position forward along the route line when GPS signal drops inside tunnels (SMART Tunnel E38, Genting Sempah) or deep underpasses.
-* **Crash & Tab-Reload Session Recovery**: Persists active trip state into `localStorage` (valid 2.5 hours); accidental browser closures, memory evictions, or incoming phone calls restore your navigation instantly.
-* **Graceful Detour Handling**: Retains current route line during signal dropouts and triggers an auto-reroute the exact second internet connectivity returns.
-
-### 🚗 3. Dedicated Travel Profiles
-* **Car**: Full expressway guidance, toll calculation, and AES speed camera alerts.
-* **Motorcycle**: Avoids prohibited routes (SMART Tunnel), highlights sheltered rain bays under flyovers, factors in zero-toll exemptions, and computes lane-filtering peak ETAs.
-
-### 🔍 4. Search & Highway Intelligence
-* **Tiered Search (<1ms)**: Instant RAM lookup for major Malaysian highway exits, R&Rs, hospitals, and national landmarks (*KLCC*, *Menara 1 Sentrum*, *Arjuna JB*), with offline IndexedDB backup.
-* **Malaysian Toll Breakdown**: Physical crossing detection with chainage rate tables (PLUS E1/E2 closed network, MEX, KESAS, LDP, Penang Bridges).
-* **AES / AwAS Radar**: Directional camera warnings with national speed limits (110 / 90 / 80 km/h).
-* **Banjir Kilat (Flood) Radar**: Historical flash-flood blackspots alert when heavy rain is detected.
+Zero audio file downloads and zero network latency. Every sound is synthesized procedurally in real-time via `AudioContext`:
+* **Swim Stroke:** 80ms low-pass filtered white noise burst (gentle fin swoosh).
+* **Pearl Chimes:** Pure sine wave triad melody that climbs in pitch on consecutive catches (C5 ➔ E5 ➔ G5).
+* **Bubble Shield Pop:** 2-operator frequency-modulated bubble pop burst.
+* **Personal Best Fanfare:** Triumphant multi-voice synth flourish.
+* **Autoplay Resilient:** Seamlessly wakes suspended mobile audio contexts on your first screen touch without audio clipping.
 
 ---
 
-## 📲 Quick Installation (PWA)
+## 📲 How to Install as an App (iOS & Android)
 
-* **iOS (Safari)**: Open site $\rightarrow$ Share button $\rightarrow$ **"Add to Home Screen"**.
-* **Android (Chrome / Brave / Edge)**: Open site $\rightarrow$ Menu $\rightarrow$ **"Install App"**.
+**Flappy Fish** is a full Progressive Web App that works 100% offline with zero app-store download:
+
+### 🍏 iPhone / iPad (Safari):
+1. Open [https://warkahkomplot.github.io/flappy-fish-pwa/](https://warkahkomplot.github.io/flappy-fish-pwa/) in **Safari**.
+2. Tap the **Share** button (box with an upward arrow at the bottom).
+3. Scroll down and tap **"Add to Home Screen"**.
+4. Tap **Add** in the top right corner. The Flappy Fish icon will appear on your home screen and open in full-screen standalone mode!
+
+### 🤖 Android (Chrome / Brave / Edge):
+1. Open [https://warkahkomplot.github.io/flappy-fish-pwa/](https://warkahkomplot.github.io/flappy-fish-pwa/) in your browser.
+2. Tap the install banner at the bottom (or tap the **three dots** in the top right $\rightarrow$ **"Install App"** / **"Add to Home screen"**).
+3. Open Flappy Fish anytime from your home screen—even in Airplane Mode with 0 Wi-Fi or cellular data!
 
 ---
 
-## 🛠️ Tech Stack
+## 🕹️ Controls
 
-* **Frontend**: React 18, TypeScript (Strict), Vite, Tailwind CSS, Lucide React.
-* **Mapping**: MapLibre GL JS (WebGL vector/raster with day/night solar calculations).
-* **Storage & Offline**: Dexie.js (IndexedDB), Service Worker CacheStorage (`Cache-Control: public`).
-* **Audio**: Native Web Speech API with bilingual Malay/English synthesizers.
+| Platform | Action |
+|---|---|
+| **Mobile / Tablet** | Tap anywhere on the screen (zero 300ms tap delay, no zoom bounce) |
+| **Desktop / Laptop** | Click anywhere with the mouse, or press **Spacebar** / **Arrow Up** |
+| **Pause / Audio** | Tap `⏸️` in the HUD to pause, tap `🔇` to toggle audio mute |
 
 ---
 
-## 🚀 Development Setup
+## 🛠️ Tech Stack & Architecture
+
+* **Frontend:** React 18, TypeScript, Tailwind CSS, Vite.
+* **Arcade Loop:** 60fps HTML5 Canvas 2D engine with Retina / High-DPI (`devicePixelRatio`) scaling and zero-allocation particle pools.
+* **Audio:** Web Audio API procedural synthesizer (zero audio assets).
+* **PWA:** Web App Manifest + Cache-First Service Worker (`public/sw.js`).
+* **CI/CD:** Automated GitHub Actions build and deployment to GitHub Pages on push to `main`.
+* **Testing:** Vitest + React Testing Library (339 unit & integration tests).
+
+---
+
+## 💻 Local Development
 
 ```bash
-# Clone repository
-git clone https://github.com/WarkahKomplot/JerayaWara.git
-cd JerayaWara
+# Clone the repository
+git clone git@github.com:WarkahKomplot/flappy-fish-pwa.git
+cd flappy-fish-pwa
 
 # Install dependencies
 npm install
 
-# Start local dev server
+# Start local development server (http://localhost:3000)
 npm run dev
 
-# Run automated tests (191 tests across 38 suites)
+# Run full test suite (339 tests)
 npm test
 
-# Production build
+# Build production bundle
 npm run build
 ```
 
@@ -82,5 +100,4 @@ npm run build
 
 ## 📄 License
 
-Open-source under the [MIT License](LICENSE).  
-Map data &copy; [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors and [Overture Maps Foundation](https://overturemaps.org/).
+This project is 100% free and open-source under the [MIT License](LICENSE).
