@@ -55,6 +55,12 @@ describe('GameEngine scene snapshot and render events', () => {
     expect(snap.obstacles[0].pearl?.visualY).toBeCloseTo(
       resolvePearlY(2, getEntitySeed(obs.id), 200)
     );
+    expect(snap.obstacles[0].x).toBe(obs.x);
+    expect(snap.obstacles[0].width).toBe(obs.width);
+    expect(snap.obstacles[0].topHeight).toBe(obs.topHeight);
+    expect(snap.obstacles[0].bottomY).toBe(obs.bottomY);
+    expect(snap.obstacles[0].pearl?.collected).toBe(false);
+    expect(snap.obstacles[0].pearl?.missed).toBe(false);
     expect(snap.fish).not.toBe(engine.fish);
     expect(snap.fish).toEqual(engine.fish);
     expect(snap.time).toBe(2);
@@ -63,6 +69,32 @@ describe('GameEngine scene snapshot and render events', () => {
       width: PHYSICS_CONSTANTS.CANVAS_WIDTH,
       height: PHYSICS_CONSTANTS.CANVAS_HEIGHT,
     });
+  });
+
+  it('does not expose live engine state through the snapshot', () => {
+    engine.start();
+    const obs = engine.obstacles[0];
+    obs.pearl = {
+      id: 'p',
+      x: 120,
+      y: 200,
+      radius: 12,
+      collected: false,
+      missed: false,
+    };
+
+    const snap = engine.getSceneSnapshot();
+    const originalObstacleX = obs.x;
+    const originalTopHeight = obs.topHeight;
+    snap.fish.x = 999;
+    snap.obstacles[0].x = 999;
+    snap.obstacles[0].topHeight = 999;
+    snap.obstacles[0].pearl!.y = 999;
+
+    expect(engine.fish.x).toBe(80);
+    expect(engine.obstacles[0].x).toBe(originalObstacleX);
+    expect(engine.obstacles[0].topHeight).toBe(originalTopHeight);
+    expect(engine.obstacles[0].pearl?.y).toBe(200);
   });
 
   it('emits a pearl event when collected', () => {
@@ -83,6 +115,10 @@ describe('GameEngine scene snapshot and render events', () => {
     const pearlEvent = events.find((event) => event.type === 'pearl');
     expect(pearlEvent).toBeDefined();
     expect(pearlEvent?.t).toBeCloseTo(engine.gameTime);
+    expect(pearlEvent?.x).toBe(obs.pearl.x);
+    expect(pearlEvent?.y).toBe(
+      resolvePearlY(engine.gameTime, getEntitySeed(obs.id), obs.pearl.y)
+    );
   });
 
   it('prunes events older than one second', () => {
@@ -91,6 +127,31 @@ describe('GameEngine scene snapshot and render events', () => {
 
     expect(engine.getSceneSnapshot().events).toHaveLength(0);
     expect(engine.events).toHaveLength(0);
+  });
+
+  it('keeps events at the one-second boundary and drops older ones', () => {
+    engine.gameTime = 5;
+    engine.events = [
+      { type: 'hit', x: 0, y: 0, t: 5 },
+      { type: 'best', x: 0, y: 0, t: 4 },
+      { type: 'pearl', x: 0, y: 0, t: 3.999 },
+    ];
+
+    const snap = engine.getSceneSnapshot();
+
+    expect(snap.events.map((event) => event.type)).toEqual(['hit', 'best']);
+    expect(engine.events.map((event) => event.type)).toEqual(['hit', 'best']);
+  });
+
+  it('returns a non-aliased events array', () => {
+    engine.events.push({ type: 'hit', x: 0, y: 0, t: 0 });
+    engine.gameTime = 0.5;
+
+    const snap = engine.getSceneSnapshot();
+    snap.events.push({ type: 'best', x: 1, y: 1, t: 0.5 });
+
+    expect(snap.events).not.toBe(engine.events);
+    expect(engine.events).toHaveLength(1);
   });
 
   it('emits shield-activate when the third pearl deploys the shield', () => {

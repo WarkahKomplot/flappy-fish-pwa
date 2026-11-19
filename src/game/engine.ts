@@ -560,7 +560,7 @@ export class GameEngine {
         target: this.ribbonTargetScore,
         crossed: this.ribbonCrossed,
       },
-      events: this.events,
+      events: this.events.slice(),
     };
   }
 
