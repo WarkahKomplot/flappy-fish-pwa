@@ -412,21 +412,102 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       expect(screen.getByTestId('start-screen')).toBeDefined();
     });
 
-    it('persists the selected FX preference and restores it on a new session', () => {
+    it('persists the selected Off preference and restores it on a new session', () => {
       const first = render(<App />);
 
       fireEvent.click(screen.getByTestId('fx-open-button'));
-      fireEvent.click(screen.getByTestId('fx-option-medium'));
+      fireEvent.click(screen.getByTestId('fx-option-off'));
 
-      expect(localStorage.getItem('flappy_fish_fx')).toBe('medium');
-      expect(screen.getByTestId('fx-option-medium').getAttribute('aria-checked')).toBe('true');
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+      expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
 
       first.unmount();
 
       render(<App />);
       fireEvent.click(screen.getByTestId('fx-open-button'));
 
-      expect(screen.getByTestId('fx-option-medium').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('reverts a failed GL switch to Off, persists Off and explains it', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      expect(screen.queryByTestId('fx-failure-message')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('fx-option-high'));
+
+      // The failed switch must not remain the stored/selected choice.
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+      expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('fx-option-high').getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByTestId('fx-effective-tier').textContent).toContain('Off');
+      expect(screen.getByTestId('fx-failure-message').textContent).toContain(
+        'switched to Off'
+      );
+    });
+
+    it('does not show a failure message for a legitimate Auto · Off', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+
+      expect(screen.getByTestId('fx-option-auto').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('fx-effective-tier').textContent).toContain('Off');
+      expect(screen.queryByTestId('fx-failure-message')).toBeNull();
+    });
+
+    it('retries a fresh init when High is selected again after the revert', () => {
+      const getContext = HTMLCanvasElement.prototype.getContext as unknown as ReturnType<
+        typeof vi.fn
+      >;
+
+      render(<App />);
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      fireEvent.click(screen.getByTestId('fx-option-high'));
+
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+
+      getContext.mockClear();
+      fireEvent.click(screen.getByTestId('fx-option-high'));
+
+      // A new backend/init was attempted even though the preference had been
+      // reverted, and it failed again, so the final state is still Off.
+      const webglCalls = getContext.mock.calls.filter(
+        ([contextType]) => contextType === 'webgl2'
+      );
+      expect(webglCalls).toHaveLength(1);
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+      expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('fx-failure-message')).toBeDefined();
+    });
+
+    it('does not start a run when Space is pressed on a start-screen control', () => {
+      render(<App />);
+
+      fireEvent.keyDown(screen.getByTestId('fx-open-button'), {
+        key: ' ',
+        code: 'Space',
+      });
+
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+      expect(screen.queryByTestId('hud-score')).toBeNull();
+    });
+
+    it('selects a panel radio with Space without starting a run', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      fireEvent.keyDown(screen.getByTestId('fx-option-low'), {
+        key: ' ',
+        code: 'Space',
+      });
+
+      // The radio activated (the failed GL switch reverted to Off), but the
+      // window-level Space tap handler never started/flapped the game.
+      expect(screen.getByTestId('fx-failure-message')).toBeDefined();
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+      expect(screen.queryByTestId('hud-score')).toBeNull();
     });
   });
 });

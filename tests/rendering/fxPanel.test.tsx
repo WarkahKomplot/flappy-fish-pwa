@@ -173,4 +173,115 @@ describe('FxPanel', () => {
 
     expect(screen.queryByTestId('fx-panel')).toBeNull();
   });
+
+  it('shows a failure message inline without changing the selected option', () => {
+    render(
+      <FxPanel
+        isOpen
+        preference="off"
+        effectiveTier="off"
+        failureMessage="Effects unavailable — switched to Off"
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('fx-failure-message').textContent).toContain(
+      'Effects unavailable — switched to Off'
+    );
+    expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('does not render a failure message for a legitimate Auto · Off', () => {
+    render(
+      <FxPanel
+        isOpen
+        preference="auto"
+        effectiveTier="off"
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('fx-failure-message')).toBeNull();
+  });
+
+  it('activates a radio with Space and keeps the key inside the dialog', () => {
+    const onSelect = vi.fn();
+
+    render(
+      <FxPanel
+        isOpen
+        preference="auto"
+        effectiveTier="high"
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.keyDown(screen.getByTestId('fx-option-low'), {
+      key: ' ',
+      code: 'Space',
+    });
+
+    expect(onSelect).toHaveBeenCalledWith('low');
+  });
+
+  it('moves selection and focus with arrow keys like a native radio group', () => {
+    const onSelect = vi.fn();
+
+    render(
+      <FxPanel
+        isOpen
+        preference="auto"
+        effectiveTier="high"
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.keyDown(screen.getByTestId('fx-option-auto'), {
+      key: 'ArrowDown',
+      code: 'ArrowDown',
+    });
+    expect(onSelect).toHaveBeenLastCalledWith('high');
+    expect(document.activeElement).toBe(screen.getByTestId('fx-option-high'));
+
+    fireEvent.keyDown(screen.getByTestId('fx-option-high'), {
+      key: 'ArrowUp',
+      code: 'ArrowUp',
+    });
+    expect(onSelect).toHaveBeenLastCalledWith('auto');
+    expect(document.activeElement).toBe(screen.getByTestId('fx-option-auto'));
+
+    // Wrap backwards from the first option to the last.
+    fireEvent.keyDown(screen.getByTestId('fx-option-auto'), {
+      key: 'ArrowUp',
+      code: 'ArrowUp',
+    });
+    expect(onSelect).toHaveBeenLastCalledWith('off');
+    expect(document.activeElement).toBe(screen.getByTestId('fx-option-off'));
+  });
+
+  it('traps Tab focus inside the dialog', () => {
+    render(
+      <FxPanel
+        isOpen
+        preference="auto"
+        effectiveTier="high"
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const close = screen.getByTestId('fx-close-button');
+    const last = screen.getByTestId('fx-option-off');
+
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab', code: 'Tab' });
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.keyDown(close, { key: 'Tab', code: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
 });

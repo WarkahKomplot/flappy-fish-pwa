@@ -22,6 +22,12 @@ import {
 import type { FxPreference, QualityTier } from './game/rendering/types';
 import type { GameStatus, SkinId } from './game/types';
 
+type ExplicitGlTier = Exclude<QualityTier, 'off'>;
+
+function isExplicitGlTier(pref: FxPreference): pref is ExplicitGlTier {
+  return pref === 'high' || pref === 'medium' || pref === 'low';
+}
+
 /**
  * Root Application:
  * Seamlessly orchestrates 60fps HTML5 Canvas game engine,
@@ -57,6 +63,12 @@ export function App() {
   );
   const [effectiveTier, setEffectiveTier] = useState<QualityTier>('off');
   const [isFxOpen, setIsFxOpen] = useState<boolean>(false);
+  // §7.10: an explicit GL choice that cannot run reverts to Off with a short
+  // inline message. Auto·Off is legitimate and stays silent.
+  const [fxFailureMessage, setFxFailureMessage] = useState<string | null>(null);
+  const pendingFxSelectionRef = useRef<ExplicitGlTier | null>(
+    isExplicitGlTier(fxPreference) ? fxPreference : null
+  );
 
   // Singleton GameEngine reference
   const engineRef = useRef<GameEngine | null>(null);
@@ -132,15 +144,46 @@ export function App() {
     [engine]
   );
 
-  // FX preference: persist first, then let GameCanvas apply the change. The
-  // panel stays open so the resolved tier line can show the result.
-  const handleSelectFx = useCallback((pref: FxPreference) => {
-    saveFxPreference(pref);
-    setFxPreference(pref);
+  // FX preference: persist the visible choice, then let GameCanvas apply it.
+  // A manual GL choice is "pending" until GameCanvas reports a tier after a
+  // successful resize/first frame; an Off report reverts and explains why.
+  const handleSelectFx = useCallback(
+    (pref: FxPreference) => {
+      saveFxPreference(pref);
+      setFxPreference(pref);
+      setFxFailureMessage(null);
+      // Re-selecting the current value is a React no-op and never reaches
+      // GameCanvas, so it must not arm a failure revert.
+      pendingFxSelectionRef.current =
+        pref !== fxPreference && isExplicitGlTier(pref) ? pref : null;
+    },
+    [fxPreference]
+  );
+
+  const handleEffectiveTierChange = useCallback((tier: QualityTier) => {
+    setEffectiveTier(tier);
+
+    const pending = pendingFxSelectionRef.current;
+    if (!pending) {
+      return;
+    }
+
+    pendingFxSelectionRef.current = null;
+
+    if (tier === 'off') {
+      // The selected GL tier never completed a resize/first frame. Persist
+      // Off so a reload cannot keep retrying a choice that cannot run here.
+      saveFxPreference('off');
+      setFxPreference('off');
+      setFxFailureMessage('Effects unavailable — switched to Off');
+    }
   }, []);
 
   const handleOpenFx = useCallback(() => setIsFxOpen(true), []);
-  const handleCloseFx = useCallback(() => setIsFxOpen(false), []);
+  const handleCloseFx = useCallback(() => {
+    setIsFxOpen(false);
+    setFxFailureMessage(null);
+  }, []);
 
   // Instant retry (<0.2s transition)
   const handleRetry = useCallback(() => {
@@ -167,7 +210,7 @@ export function App() {
           engine={engine}
           onTap={handleTap}
           fxPreference={fxPreference}
-          onEffectiveTierChange={setEffectiveTier}
+          onEffectiveTierChange={handleEffectiveTierChange}
         />
 
         {/* In-Game HUD: Score, Pearl Combo, Shield, Pause, Mute */}
@@ -222,6 +265,7 @@ export function App() {
           isOpen={isFxOpen}
           preference={fxPreference}
           effectiveTier={effectiveTier}
+          failureMessage={fxFailureMessage}
           onSelect={handleSelectFx}
           onClose={handleCloseFx}
         />

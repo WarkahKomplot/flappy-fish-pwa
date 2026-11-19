@@ -790,7 +790,7 @@ git commit -m "feat(render): add glows, GPU particles and impact effects"
 **Files:**
 - Create: `src/components/FxPanel.tsx`
 - Modify: `src/components/StartScreen.tsx`, `src/components/HUD.tsx`, `src/App.tsx`, `src/components/GameCanvas.tsx`
-- Test: `tests/rendering/fxPanel.test.tsx`, update `tests/ui.test.tsx`
+- Test: `tests/rendering/fxPanel.test.tsx`, update `tests/ui.test.tsx`, and add 3 new preference-switch/re-init tests to `tests/rendering/gameCanvas.test.tsx` (the Off-with-backend case pre-existed)
 
 **Interfaces:**
 - `FxPanel` props:

@@ -5,25 +5,15 @@ export interface FxPanelProps {
   isOpen: boolean;
   preference: FxPreference;
   effectiveTier: QualityTier;
+  /** Short inline explanation, e.g. after a failed GL switch. */
+  failureMessage?: string | null;
   onSelect: (pref: FxPreference) => void;
   onClose: () => void;
 }
 
-interface FxOption {
-  value: FxPreference;
-  label: string;
-  hint: string;
-}
+const FX_OPTIONS: ReadonlyArray<FxPreference> = ['auto', 'high', 'medium', 'low', 'off'];
 
-const FX_OPTIONS: ReadonlyArray<FxOption> = [
-  { value: 'auto', label: 'Auto', hint: 'Best tier for this device' },
-  { value: 'high', label: 'High', hint: 'Bloom, rays and particles' },
-  { value: 'medium', label: 'Medium', hint: 'Bloom with lighter effects' },
-  { value: 'low', label: 'Low', hint: 'GL scene, no post effects' },
-  { value: 'off', label: 'Off', hint: 'Classic Canvas 2D' },
-];
-
-const PREF_LABEL: Record<FxPreference, string> = {
+const LABEL: Record<FxPreference, string> = {
   auto: 'Auto',
   high: 'High',
   medium: 'Medium',
@@ -31,35 +21,43 @@ const PREF_LABEL: Record<FxPreference, string> = {
   off: 'Off',
 };
 
-const TIER_LABEL: Record<QualityTier, string> = {
-  high: 'High',
-  medium: 'Medium',
-  low: 'Low',
-  off: 'Off',
-};
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableIn(dialog: HTMLElement | null): HTMLElement[] {
+  if (!dialog) {
+    return [];
+  }
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+}
+
+/** Reads the FxPreference out of an `fx-option-<value>` test id. */
+function radioValue(target: EventTarget | null): FxPreference | null {
+  const radio =
+    target instanceof Element ? target.closest<HTMLElement>('[role="radio"]') : null;
+  const value = radio?.getAttribute('data-testid')?.replace('fx-option-', '');
+  return value && FX_OPTIONS.includes(value as FxPreference)
+    ? (value as FxPreference)
+    : null;
+}
 
 /**
- * Emergency quality switch (spec §7.10):
- * - one radio group for Auto / High / Medium / Low / Off;
- * - always shows the currently resolved tier, which may differ from the
- *   chosen preference (Auto resolves against hardware; a failed GL switch
- *   resolves to Off);
- * - Escape, the backdrop and the close button dismiss it, and focus returns
- *   to the trigger;
- * - selecting an option only changes the preference. It never starts a run.
+ * Emergency quality switch (spec §7.10): Auto / High / Medium / Low / Off,
+ * always showing the resolved tier. It never starts a run, and it owns every
+ * key pressed inside it so the game's window-level tap input cannot fire.
  */
 export const FxPanel: React.FC<FxPanelProps> = ({
   isOpen,
   preference,
   effectiveTier,
+  failureMessage,
   onSelect,
   onClose,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Remember the trigger so closing restores focus to the control that opened
-  // the panel (a start-screen button or the paused HUD).
+  // Move focus in on open and return it to the trigger on close.
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -78,7 +76,7 @@ export const FxPanel: React.FC<FxPanelProps> = ({
     return () => {
       const element = returnFocusRef.current;
       returnFocusRef.current = null;
-      if (element && typeof element.focus === 'function' && document.contains(element)) {
+      if (element && document.contains(element)) {
         element.focus();
       }
     };
@@ -89,16 +87,83 @@ export const FxPanel: React.FC<FxPanelProps> = ({
       return;
     }
 
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const onEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
         onClose();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
   }, [isOpen, onClose]);
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // GameCanvas listens on window for Space/ArrowUp; keep panel keys local.
+    event.stopPropagation();
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key === 'Tab') {
+      const focusables = focusableIn(dialogRef.current);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      // The dialog itself is tabIndex=-1; treat it as outside so Shift+Tab
+      // cannot escape to the game behind the modal.
+      const inside =
+        active !== dialogRef.current && (dialogRef.current?.contains(active) ?? false);
+
+      if (event.shiftKey) {
+        if (!inside || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!inside || active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+
+    const value = radioValue(event.target);
+    if (!value) {
+      return;
+    }
+
+    if (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter') {
+      // Activate on keydown so the key cannot reach the game's window handler.
+      event.preventDefault();
+      onSelect(value);
+      return;
+    }
+
+    if (
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft'
+    ) {
+      event.preventDefault();
+      const current = FX_OPTIONS.indexOf(value);
+      const delta = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1;
+      const next = FX_OPTIONS[(current + delta + FX_OPTIONS.length) % FX_OPTIONS.length];
+      onSelect(next);
+      dialogRef.current
+        ?.querySelector<HTMLElement>(`[data-testid="fx-option-${next}"]`)
+        ?.focus();
+    }
+  };
 
   if (!isOpen) {
     return null;
@@ -117,82 +182,69 @@ export const FxPanel: React.FC<FxPanelProps> = ({
         aria-labelledby="fx-panel-title"
         data-testid="fx-panel"
         tabIndex={-1}
-        className="w-full max-w-xs rounded-2xl border border-cyan-500/30 bg-slate-900/95 p-4 text-slate-100 shadow-2xl"
+        onKeyDown={handleDialogKeyDown}
+        className="max-h-full w-full max-w-xs overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-900/95 p-4 text-slate-100 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 id="fx-panel-title" className="text-sm font-black uppercase tracking-widest text-cyan-200">
-              Visual Effects
-            </h2>
-            <p className="mt-1 text-[11px] text-slate-400">
-              If the screen looks wrong, switch to Off.
-            </p>
-          </div>
+        <div className="flex items-center justify-between">
+          <h2 id="fx-panel-title" className="text-sm font-black uppercase tracking-widest text-cyan-200">
+            Visual Effects
+          </h2>
           <button
             type="button"
             data-testid="fx-close-button"
             onClick={onClose}
             aria-label="Close visual effects settings"
-            className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-700/60 bg-slate-800/80 text-sm text-slate-200 transition-transform active:scale-90 hover:bg-slate-700/80"
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-700/60 bg-slate-800/80 text-sm text-slate-200 active:scale-90"
           >
             ✕
           </button>
         </div>
 
-        <div className="mt-3 flex items-center justify-between rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Effective
-          </span>
+        <div className="mt-3 rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2 text-xs">
+          <span className="text-slate-400">Effective </span>
           <span
             data-testid="fx-effective-tier"
-            className="text-xs font-bold text-cyan-300"
+            className="font-bold text-cyan-300"
             aria-live="polite"
           >
-            {PREF_LABEL[preference]} · {TIER_LABEL[effectiveTier]}
+            {LABEL[preference]} · {LABEL[effectiveTier]}
           </span>
         </div>
 
+        {failureMessage ? (
+          <p
+            data-testid="fx-failure-message"
+            role="status"
+            className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
+          >
+            {failureMessage}
+          </p>
+        ) : null}
+
         <div role="radiogroup" aria-label="Visual effects quality" className="mt-3 flex flex-col gap-2">
-          {FX_OPTIONS.map((option) => {
-            const isChecked = preference === option.value;
+          {FX_OPTIONS.map((value) => {
+            const isChecked = preference === value;
 
             return (
               <button
-                key={option.value}
+                key={value}
                 type="button"
                 role="radio"
                 aria-checked={isChecked}
-                data-testid={`fx-option-${option.value}`}
-                onClick={() => onSelect(option.value)}
-                className={`flex min-h-[44px] w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors active:scale-[0.99] ${
+                data-testid={`fx-option-${value}`}
+                onClick={() => onSelect(value)}
+                className={`min-h-[44px] w-full rounded-xl border px-3 text-sm font-semibold ${
                   isChecked
-                    ? 'border-cyan-400/70 bg-cyan-500/15 shadow-[0_0_12px_rgba(6,182,212,0.25)]'
-                    : 'border-slate-700/60 bg-slate-800/40 hover:bg-slate-800/70'
+                    ? 'border-cyan-400/70 bg-cyan-500/15 text-cyan-100'
+                    : 'border-slate-700/60 bg-slate-800/40 text-slate-200'
                 }`}
               >
-                <span
-                  aria-hidden="true"
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                    isChecked
-                      ? 'border-cyan-300 bg-cyan-400 text-[10px] text-slate-950'
-                      : 'border-slate-600 bg-slate-900'
-                  }`}
-                >
-                  {isChecked ? '●' : ''}
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="text-sm font-semibold text-slate-100">{option.label}</span>
-                  <span className="text-[10px] leading-tight text-slate-400">{option.hint}</span>
-                </span>
+                {LABEL[value]}
               </button>
             );
           })}
         </div>
-
-        <p className="mt-3 text-[10px] leading-snug text-slate-500">
-          Your choice is saved on this device. Auto follows the device.
-        </p>
       </div>
     </div>
   );

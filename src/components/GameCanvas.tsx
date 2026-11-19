@@ -54,6 +54,22 @@ function readDeviceMemory(): number | undefined {
   return typeof memory === 'number' ? memory : undefined;
 }
 
+/**
+ * Interactive overlay controls own their keyboard events. Without this guard
+ * the window-level Space/ArrowUp tap handler would start or flap the game
+ * while a start-screen button or an FX-panel radio has focus.
+ */
+const GAME_INPUT_IGNORED_SELECTOR =
+  'button, input, select, textarea, a, [role="dialog"]';
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    typeof Element !== 'undefined' &&
+    target instanceof Element &&
+    target.closest(GAME_INPUT_IGNORED_SELECTOR) !== null
+  );
+}
+
 export interface GameCanvasProps {
   engine: GameEngine;
   onTap?: () => void;
@@ -323,16 +339,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         return null;
       }
 
-      const next = new PostFXController(backend, {
-        reducedMotion,
-        onTierChange: (tier) => {
-          // Only report while the controller is usable; any failure reports
-          // Off through enterFallback, which always runs last.
-          if (available && !disposed) {
-            onEffectiveTierChangeRef.current?.(tier);
-          }
-        },
-      });
+      const next = new PostFXController(backend, { reducedMotion });
       controller = next;
 
       let initialised = false;
@@ -350,6 +357,17 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
       available = true;
       return next;
+    };
+
+    /**
+     * Reports the tier only after the resize/first frame has succeeded. A
+     * failed switch reports Off through enterFallback and leaves `available`
+     * false, so this never announces a GL tier that immediately disappears.
+     */
+    const reportAppliedTier = () => {
+      if (!disposed && available && controller) {
+        onEffectiveTierChangeRef.current?.(controller.tier);
+      }
     };
 
     /**
@@ -378,6 +396,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           return;
         }
         updateDimensions();
+        reportAppliedTier();
         return;
       }
 
@@ -405,6 +424,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       updateDimensions();
+      reportAppliedTier();
     };
 
     let resizeObserver: ResizeObserver | null = null;
@@ -481,6 +501,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' || e.code === 'ArrowUp') {
+        // A focused button/radio/dialog owns the key; activating it must not
+        // also start a run or flap behind the overlay.
+        if (isInteractiveTarget(e.target)) {
+          return;
+        }
         e.preventDefault();
         engine.handleInput();
         onTapRef.current?.();
