@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { GameCanvas } from './components/GameCanvas';
+import { DebugOverlay, EMPTY_DEBUG_METRICS, type DebugMetrics } from './components/DebugOverlay';
 import { HUD } from './components/HUD';
 import { StartScreen } from './components/StartScreen';
 import { GameOverModal } from './components/GameOverModal';
@@ -19,6 +20,7 @@ import {
   resolveFxPreference,
   saveFxPreference,
 } from './game/rendering/fxSettings';
+import { parseQaFlags } from './game/rendering/qa';
 import type { FxPreference, QualityTier } from './game/rendering/types';
 import type { GameStatus, SkinId } from './game/types';
 
@@ -66,6 +68,16 @@ export function App() {
   // §7.10: an explicit GL choice that cannot run reverts to Off with a short
   // inline message. Auto·Off is legitimate and stays silent.
   const [fxFailureMessage, setFxFailureMessage] = useState<string | null>(null);
+  // QA switches are read once from the URL; an ordinary load is all-off, so
+  // none of the debug/benchmark/freeze code paths run in production.
+  const qaFlags = useMemo(
+    () =>
+      parseQaFlags(
+        typeof window !== 'undefined' ? window.location.search : ''
+      ),
+    []
+  );
+  const debugMetricsRef = useRef<DebugMetrics>({ ...EMPTY_DEBUG_METRICS });
   const pendingFxSelectionRef = useRef<ExplicitGlTier | null>(
     isExplicitGlTier(fxPreference) ? fxPreference : null
   );
@@ -211,6 +223,8 @@ export function App() {
           onTap={handleTap}
           fxPreference={fxPreference}
           onEffectiveTierChange={handleEffectiveTierChange}
+          qaFlags={qaFlags}
+          metricsRef={debugMetricsRef}
         />
 
         {/* In-Game HUD: Score, Pearl Combo, Shield, Pause, Mute */}
@@ -226,8 +240,9 @@ export function App() {
           onOpenFx={handleOpenFx}
         />
 
-        {/* Start Screen Overlay: Tap to Swim Guide & Wardrobe */}
-        {status === 'idle' && (
+        {/* Start Screen Overlay: Tap to Swim Guide & Wardrobe. `?freeze` skips
+            it so the deterministic fixture frame is unobstructed. */}
+        {!qaFlags.freeze && status === 'idle' && (
           <StartScreen
             highScore={highScore}
             lifetimePearls={lifetimePearls}
@@ -270,6 +285,9 @@ export function App() {
           onSelect={handleSelectFx}
           onClose={handleCloseFx}
         />
+
+        {/* ?debug=1 frame stats; renders null in a normal load. */}
+        <DebugOverlay visible={qaFlags.debug} metricsRef={debugMetricsRef} />
       </main>
     </div>
   );

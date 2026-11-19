@@ -82,6 +82,26 @@ function mockMeasuredStage(width = 390, height = 844): void {
   );
 }
 
+/**
+ * Auto resolves to High only on the desktop-pointer path in jsdom; stub
+ * matchMedia so the adaptive test starts High and can step down to Medium.
+ */
+function mockDesktopPointer(): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query.includes('hover: hover'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  );
+}
+
 describe('GameCanvas two-canvas structure and fallback', () => {
   let engine: GameEngine;
   let mockSounds: SoundEffects;
@@ -684,5 +704,169 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(engine.backgroundVisible).toBe(true);
     expect(engine.afterRender).toBeUndefined();
     expect(backend.dispose).toHaveBeenCalled();
+  });
+
+  it('drops one Auto tier after 5 s over 20 ms, never upgrades, and re-evaluates on retry', () => {
+    mockDesktopPointer();
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    expect(onTier).toHaveBeenLastCalledWith('high');
+
+    let now = 1000;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const driveFrames = (count: number) => {
+      act(() => {
+        for (let i = 0; i < count; i += 1) {
+          now += 25;
+          engine.afterRender?.(engine.getSceneSnapshot());
+        }
+      });
+    };
+
+    engine.status = 'playing';
+    // 201 calls: the first stamps the clock, the remaining 200 × 25 ms fill
+    // the 5 s adaptive window at a p95 well over the 20 ms threshold.
+    driveFrames(201);
+    expect(onTier).toHaveBeenLastCalledWith('medium');
+
+    // One downgrade per run: another slow window must not reach Low.
+    driveFrames(201);
+    expect(onTier).toHaveBeenLastCalledWith('medium');
+    expect(onTier.mock.calls.map(([tier]) => tier)).toEqual(['high', 'medium']);
+
+    // Pausing and resuming is the same run and must not re-arm the budget.
+    engine.status = 'paused';
+    driveFrames(1);
+    engine.status = 'playing';
+    driveFrames(201);
+    expect(onTier.mock.calls.map(([tier]) => tier)).toEqual(['high', 'medium']);
+
+    // Retry re-arms the one-downgrade budget for the next run.
+    engine.status = 'idle';
+    driveFrames(1);
+    engine.status = 'playing';
+    driveFrames(201);
+    expect(onTier).toHaveBeenLastCalledWith('low');
+
+    // Never auto-upgrade, and no oscillation after the run's one downgrade.
+    driveFrames(201);
+    expect(onTier.mock.calls.map(([tier]) => tier)).toEqual([
+      'high',
+      'medium',
+      'low',
+    ]);
+    nowSpy.mockRestore();
+  });
+
+  it('does not adapt a manual tier', () => {
+    mockDesktopPointer();
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        fxPreference="high"
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    let now = 1000;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    engine.status = 'playing';
+
+    act(() => {
+      for (let i = 0; i < 401; i += 1) {
+        now += 40;
+        engine.afterRender?.(engine.getSceneSnapshot());
+      }
+    });
+
+    expect(onTier.mock.calls.map(([tier]) => tier)).toEqual(['high']);
+    nowSpy.mockRestore();
+  });
+
+  it('logs p50/p95 on run end when ?benchmark=1 is set', () => {
+    mockMeasuredStage();
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const backend = fakeBackend();
+    render(
+      <GameCanvas
+        engine={engine}
+        fxPreference="high"
+        backendFactory={() => backend}
+        qaFlags={{ debug: false, benchmark: true, freeze: false }}
+      />
+    );
+
+    let now = 1000;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    engine.status = 'playing';
+
+    act(() => {
+      for (let i = 0; i < 30; i += 1) {
+        now += 16;
+        engine.afterRender?.(engine.getSceneSnapshot());
+      }
+      engine.status = 'gameover';
+      now += 16;
+      engine.afterRender?.(engine.getSceneSnapshot());
+    });
+
+    const benchmarkLine = log.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes('[flappy-fish benchmark]'));
+
+    expect(benchmarkLine).toBeDefined();
+    expect(benchmarkLine).toContain('p50=');
+    expect(benchmarkLine).toContain('p95=');
+    expect(benchmarkLine).toContain('tier=high');
+    expect(benchmarkLine).toContain('capture=585x1040');
+    nowSpy.mockRestore();
+  });
+
+  it('applies the deterministic fixture and skips the loop and input under ?freeze', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const startLoop = vi.spyOn(engine, 'startLoop');
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => backend}
+        qaFlags={{
+          debug: false,
+          benchmark: false,
+          freeze: true,
+          seed: 7,
+          time: 2,
+        }}
+      />
+    );
+
+    expect(engine.status).toBe('paused');
+    expect(engine.gameTime).toBe(2);
+    expect(engine.fish.x).toBe(80);
+    expect(engine.fish.y).toBe(300);
+    expect(engine.obstacles.map((obs) => obs.x)).toEqual([180, 380, 580]);
+    expect(startLoop).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(screen.getByTestId('game-canvas'), {
+      pointerType: 'mouse',
+    });
+    expect(engine.status).toBe('paused');
   });
 });

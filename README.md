@@ -3,7 +3,7 @@
 > An underwater, offline-capable Progressive Web App (PWA) clone of *Flappy Bird* with fluid aquatic physics, a 3-Pearl Bubble Shield combo system, procedural Web Audio, and milestone skin unlocks.
 
 [![Live Web App](https://img.shields.io/badge/Play%20Online-GitHub%20Pages-blue?style=for-the-badge&logo=github)](https://warkahkomplot.github.io/flappy-fish-pwa/)
-[![Tests](https://img.shields.io/badge/Vitest-345%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
+[![Tests](https://img.shields.io/badge/Vitest-476%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
 [![PWA](https://img.shields.io/badge/PWA-100%25%20Offline-cyan?style=for-the-badge)](https://warkahkomplot.github.io/flappy-fish-pwa/)
 [![License](https://img.shields.io/badge/License-MIT-amber?style=for-the-badge)](LICENSE)
 
@@ -65,14 +65,48 @@ Zero audio file downloads and zero network latency. Every sound is synthesized p
 
 ---
 
+## ✨ Cinematic FX & Quality Control
+
+A WebGL2 compositor adds the full-bleed animated background, bloom, colour
+grade, caustics, glows and impact effects over the unchanged Canvas 2D scene.
+If WebGL2 is missing or a GL frame fails, the game automatically falls back to
+the exact Canvas 2D look and keeps the run alive.
+
+The quality control lives on the **start screen** (next to Skins) and in the
+**pause overlay**, and offers five settings:
+
+| Setting | Behaviour |
+|---|---|
+| **Auto** *(default)* | Picks a tier from WebGL2 support, desktop/mobile heuristics and `prefers-reduced-motion`. If a run's p95 frame time stays above 20 ms for ~5 s, Auto drops **one** tier for that run. It never upgrades automatically and re-evaluates on each start/retry. |
+| **High / Medium / Low** | Manual GL tiers (`Low` keeps the full-bleed background + scene composite without bloom/rays/CA/grain). A manual choice disables adaptivity. |
+| **Off** | Exact Canvas 2D renderer, today's look and frame rate. |
+
+The choice is persisted in `localStorage["flappy_fish_fx"]`; `prefers-reduced-motion`
+removes shake, chromatic aberration and grain without changing the tier. A
+failed GL switch reverts to Off and shows a short inline message.
+
+### QA URL flags (development / device checks)
+
+These are additive overrides for QA only; a normal load uses none of them.
+
+| Flag | Purpose |
+|---|---|
+| `?fx=auto` (also `high`, `medium`, `low`, `off`) | Session-only FX override (outranks the persisted setting). |
+| `?debug=1` | Overlay with FPS, p50/p95 frame time, effective tier, and capture/post buffer sizes. Hidden in a normal load. |
+| `?benchmark=1` | Logs `p50`/`p95` frame time, tier and buffer sizes to the console at the end of each run. |
+| `?freeze=1&seed=7&t=2` | Deterministic paused fixture (fish, three obstacles, pearls, ribbon) with the start screen and input disabled, for A/B screenshots. `t` is the frozen scene time. |
+
+---
+
 ## 🛠️ Tech Stack & Architecture
 
 * **Frontend:** React 18, TypeScript, Tailwind CSS, Vite.
 * **Arcade Loop:** 60fps HTML5 Canvas 2D engine with Retina / High-DPI (`devicePixelRatio`) scaling and zero-allocation particle pools.
+* **Cinematic compositor:** WebGL2 post stack (full-bleed background, bloom, ACES/grade, caustics, glows) with an exact Canvas 2D fallback and Auto/High/Medium/Low/Off quality control.
 * **Audio:** Web Audio API procedural synthesizer (zero audio assets).
 * **PWA:** Web App Manifest + Cache-First Service Worker (`public/sw.js`).
 * **CI/CD:** Automated GitHub Actions build and deployment to GitHub Pages on push to `main`.
-* **Testing:** Vitest + React Testing Library (345 unit & integration tests).
+* **Testing:** Vitest + React Testing Library (476 unit & integration tests).
 
 ---
 
@@ -89,7 +123,7 @@ npm install
 # Start local development server (http://localhost:3000)
 npm run dev
 
-# Run full test suite (345 tests)
+# Run full test suite (476 tests)
 npm test
 
 # Build production bundle

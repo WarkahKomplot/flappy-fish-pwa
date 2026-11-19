@@ -6,7 +6,7 @@ import './index.css';
 // Register PWA Service Worker
 if ('serviceWorker' in navigator && (import.meta.env.PROD || process.env.NODE_ENV === 'production')) {
   window.addEventListener('load', () => {
-    const swUrl = `${import.meta.env.BASE_URL}sw.js?v=11`;
+    const swUrl = `${import.meta.env.BASE_URL}sw.js?v=12`;
     navigator.serviceWorker
       .register(swUrl)
       .then(reg => {

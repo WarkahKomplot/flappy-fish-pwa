@@ -1,7 +1,7 @@
 # Flappy Fish — Cinematic WebGL Visual Upgrade — Design
 
 - **Date:** 2026-11-19 (rev. 2, after independent renderer review)
-- **Status:** Draft — for owner approval (not approved, not started)
+- **Status:** Implemented on `flappy-fish-pwa` (Tasks 1–12). Automated gates pass; the device visual/performance gate has **not** been run.
 - **Owner:** Arief
 - **Base:** `flappy-fish-pwa` working tree **after** the pending five-fix commit (see `HANDOFF.md`)
 - **Target:** PWA on iOS Safari 15+, Android Chrome, desktop; offline; same side-on one-tap gameplay
@@ -641,3 +641,56 @@ FX control as the emergency switch.
 
 - Are the three QA devices available, or which can you test on?
 - Is ~2 weeks / phased delivery acceptable, with Phase 1 shippable first?
+
+---
+
+## 16. Implementation Status and QA Results (Task 12)
+
+Recorded at the end of the Task 12 implementation (branch `flappy-fish-pwa`).
+
+### Automated gates
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | **PASS** (clean) |
+| `npm test` | **PASS** — 476 tests in 58 files |
+| Focused `tests/rendering/qa.test.ts` | **PASS** — 11 tests |
+| `tests/rendering/gameCanvas.test.tsx` | **PASS** — 27 tests (includes adaptive, benchmark and freeze cases) |
+| `npm run build -- --outDir /tmp/flappy-task12-build --emptyOutDir` | **PASS** |
+
+`?debug=1` (FPS/p50/p95/tier/capture/post), `?benchmark=1` (p50/p95
+logged at each run end), and `?freeze=1&seed=&t=` (deterministic paused
+fixture, start screen and input disabled) are wired and unit-tested for their
+pure pieces. Adaptive quality is Auto-only, drops at most one tier per run
+after a ~5 s window above 20 ms p95, never upgrades automatically, and
+re-arms on each start/retry.
+
+### Device visual / performance gate
+
+**Not run.** This environment has no GPU/GLSL compiler, no WebGL2 driver and no
+physical iOS/Android/desktop target. No claim is made here about shader
+compilation, seams at the 9:16 edge, alpha halos, readability on device,
+context-loss behaviour, thermal/battery behaviour, offline airplane mode, or
+on-device p95. The three-device matrix in §9 remains a required owner gate; the
+QA flags are the instrumentation for it.
+
+### Bundle baseline
+
+Vite-reported build sizes (kB, decimal, including `index.html`). The Task 10/11
+figures are rebuilds of their committed trees for a like-for-like comparison.
+
+| Build | Raw total | Gzip total |
+|---|---|---|
+| `3aae4eb` baseline | 235.28 kB | 68.42 kB |
+| Task 10 (`47e0957`) | 279.47 kB | 81.09 kB |
+| Task 11 (`f67d6cd`) | 282.24 kB | 82.17 kB |
+| **Task 12 final** | **287.66 kB** | **84.20 kB** |
+
+- Hard gate: **84.20 kB gzip ≤ 100 kB** — pass.
+- Interim gate: 82.17 kB gzip after Task 11 ≤ 90 kB — pass.
+- Tasks 11+12 combined: **+8.19 kB raw / +3.11 kB gzip** (from Task 10), within
+  the ≤16 kB raw / ≤6 kB gzip allowance.
+- Task 12 alone: +5.42 kB raw / +2.03 kB gzip.
+- Cumulative vs `3aae4eb`: **+52.38 kB raw / +15.78 kB gzip**. This is above the
+  retired +45/+15 delta guardrail but below the owner-rebaselined 100 kB hard
+  total; the delta guardrail was recorded as spent at Task 10 in the plan.

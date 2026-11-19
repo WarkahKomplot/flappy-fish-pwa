@@ -1,4 +1,4 @@
-const CACHE_NAME = 'flappy-fish-v2';
+const CACHE_NAME = 'flappy-fish-v3';
 
 const CORE_ASSETS = [
   './',

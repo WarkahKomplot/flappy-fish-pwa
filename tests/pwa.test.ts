@@ -82,6 +82,14 @@ describe('PWA & Deployment Pipeline', () => {
 
       // Cache name
       expect(swCode).toMatch(/CACHE_NAME\s*=/);
+      expect(swCode).toContain("'flappy-fish-v3'");
+
+      // The registration query forces returning clients onto the new shell.
+      const mainCode = fs.readFileSync(
+        path.join(rootDir, 'src/main.tsx'),
+        'utf-8'
+      );
+      expect(mainCode).toContain('sw.js?v=12');
 
       // Core assets pre-caching
       expect(swCode).toContain('./index.html');

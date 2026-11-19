@@ -1,8 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from 'react';
 import { GameEngine } from '../game/engine';
 import { PHYSICS_CONSTANTS } from '../game/constants';
 import { PostFXController } from '../game/rendering/postFx';
-import { selectQuality } from '../game/rendering/quality';
+import { nextTier, selectQuality } from '../game/rendering/quality';
+import { FrameStats } from '../game/rendering/frameStats';
+import { applyVisualFixture } from '../game/rendering/visualFixture';
+import { DEFAULT_QA_FLAGS, type QaFlags } from '../game/rendering/qa';
 import {
   computeCaptureSize,
   computeGameRect,
@@ -17,6 +25,7 @@ import type {
   SceneSnapshot,
 } from '../game/rendering/types';
 import { RibbonLabel } from './RibbonLabel';
+import type { DebugMetrics } from './DebugOverlay';
 
 const WORLD_WIDTH = PHYSICS_CONSTANTS.CANVAS_WIDTH;
 const WORLD_HEIGHT = PHYSICS_CONSTANTS.CANVAS_HEIGHT;
@@ -82,6 +91,10 @@ export interface GameCanvasProps {
   className?: string;
   fxPreference?: FxPreference;
   onEffectiveTierChange?: (tier: QualityTier) => void;
+  /** Opt-in `?debug` / `?benchmark` / `?freeze` QA switches. */
+  qaFlags?: QaFlags;
+  /** Filled in by this component when `qaFlags.debug` is on. */
+  metricsRef?: MutableRefObject<DebugMetrics>;
   /**
    * Creates the post-FX backend. The default is the real WebGL2 backend; the
    * factory may return null (or the backend's init may fail) to force the
@@ -107,6 +120,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   className = '',
   fxPreference = 'auto',
   onEffectiveTierChange,
+  qaFlags = DEFAULT_QA_FLAGS,
+  metricsRef,
   backendFactory,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,6 +136,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const fxPreferenceRef = useRef(fxPreference);
   const backendFactoryRef = useRef(backendFactory);
   const onEffectiveTierChangeRef = useRef(onEffectiveTierChange);
+  const qaFlagsRef = useRef(qaFlags);
+  const metricsRefRef = useRef(metricsRef);
   const glMountedRef = useRef(false);
   // Set by the mount effect so the preference-change effect can drive the one
   // shared applyPreference path; null while unmounted.
@@ -146,6 +163,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   }, [onEffectiveTierChange]);
 
   useEffect(() => {
+    qaFlagsRef.current = qaFlags;
+  }, [qaFlags]);
+
+  useEffect(() => {
+    metricsRefRef.current = metricsRef;
+  }, [metricsRef]);
+
+  useEffect(() => {
     // StrictMode double-invokes mount effects in development; the cleanup
     // below resets this so a real remount still initialises.
     if (glMountedRef.current) {
@@ -165,6 +190,18 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     engine.afterRender = undefined;
     engine.backgroundVisible = true;
 
+    const flags = qaFlagsRef.current;
+    const frozen = flags.freeze;
+    const metricsEnabled = flags.debug || flags.benchmark;
+
+    // `?freeze` replaces the live scene with a deterministic paused frame
+    // before the first resize/composite. Applying it here (not in a later
+    // effect) means even the very first GL frame is the fixture, not a frame
+    // of the idle simulation.
+    if (frozen) {
+      applyVisualFixture(engine, flags.time ?? 0, flags.seed ?? 1);
+    }
+
     let controller: PostFXController | null = null;
     let available = false;
     let glVisible = false;
@@ -174,12 +211,27 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     // map world -> stage without reading layout every frame.
     let currentGameRect: GameRect | null = null;
     let currentStageWidth = 0;
+    let currentStageHeight = 0;
+
+    // Frame-time instrumentation. `runStats` feeds the debug overlay and the
+    // benchmark log for the whole run; `windowStats` is the ~5 s adaptive
+    // window and is replaced after every evaluation.
+    const runCapacity = flags.benchmark ? 3600 : 600;
+    let runStats = new FrameStats(runCapacity);
+    let windowStats = new FrameStats(600);
+    let lastFrameAt = 0;
+    let windowMs = 0;
+    let downgradedThisRun = false;
+    let previousStatus = engine.status;
+    // The overlay polls at 500 ms; sorting the ring every frame would inflate
+    // the very frame times ?debug is trying to measure.
+    let nextMetricsAt = 0;
 
     const reducedMotion = prefersReducedMotion();
     // Hardware heuristics for the Auto option. `webgl2` is asserted because
     // this value is only consumed while a GL controller is being attempted;
     // a failed init still reports Off through the fallback path.
-    const autoTier = selectQuality({
+    let autoTier = selectQuality({
       webgl2: true,
       reducedMotion,
       hardwareConcurrency:
@@ -229,21 +281,200 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
     };
 
+    /** Mirrors WebGLBackend.resize's capped post-buffer dimensions. */
+    const computePostSize = () => {
+      const profile = controller?.profile;
+      if (!profile || currentStageWidth <= 0 || currentStageHeight <= 0) {
+        return { width: 0, height: 0 };
+      }
+
+      let width = Math.max(1, Math.round(currentStageWidth * profile.postDpr));
+      let height = Math.max(1, Math.round(currentStageHeight * profile.postDpr));
+      if (width * height > profile.maxPostPixels) {
+        const scale = Math.sqrt(profile.maxPostPixels / (width * height));
+        width = Math.max(1, Math.floor(width * scale));
+        height = Math.max(1, Math.floor(height * scale));
+      }
+
+      return { width, height };
+    };
+
+    const publishMetrics = () => {
+      const ref = metricsRefRef.current;
+      if (!flags.debug || !ref) {
+        return;
+      }
+
+      const p50 = runStats.percentile(0.5);
+      const p95 = runStats.percentile(0.95);
+      const post = computePostSize();
+      const metrics = ref.current;
+      metrics.fps = p50 > 0 ? Math.round(1000 / p50) : 0;
+      metrics.p50 = p50;
+      metrics.p95 = p95;
+      metrics.tier = controller?.tier ?? 'off';
+      metrics.captureWidth = sceneCanvas.width;
+      metrics.captureHeight = sceneCanvas.height;
+      metrics.postWidth = post.width;
+      metrics.postHeight = post.height;
+    };
+
+    const logBenchmark = () => {
+      if (!flags.benchmark) {
+        return;
+      }
+
+      const p50 = runStats.percentile(0.5);
+      const p95 = runStats.percentile(0.95);
+      const post = computePostSize();
+      console.log(
+        `[flappy-fish benchmark] p50=${p50.toFixed(1)}ms p95=${p95.toFixed(
+          1
+        )}ms tier=${controller?.tier ?? 'off'} capture=${sceneCanvas.width}x${
+          sceneCanvas.height
+        } post=${post.width}x${post.height}`
+      );
+    };
+
+    /**
+     * Per-frame QA/adaptation bookkeeping. Frame time is the interval between
+     * presented frames (not simulation time), so a 30 fps display shows
+     * ~33 ms and crosses the 20 ms adaptive threshold as intended.
+     */
+    const recordFrame = (snapshot: SceneSnapshot) => {
+      const now =
+        typeof performance !== 'undefined' &&
+        typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      const status = snapshot.status;
+      // A pause/resume is still the same run; only idle/gameover -> playing
+      // opens a new one-downgrade budget.
+      const newRun =
+        status === 'playing' &&
+        (previousStatus === 'idle' || previousStatus === 'gameover');
+
+      if (newRun) {
+        // Re-evaluate at every start/retry: fresh window, one downgrade budget.
+        runStats = new FrameStats(runCapacity);
+        windowStats = new FrameStats(600);
+        windowMs = 0;
+        downgradedThisRun = false;
+        // Do not count the idle/menu gap before the first tap as a frame.
+        lastFrameAt = 0;
+      }
+
+      if (status === 'playing' && lastFrameAt > 0) {
+        const delta = now - lastFrameAt;
+        // Ignore tab-suspension gaps and the first frame after a resume.
+        if (delta > 0 && delta < 1000) {
+          runStats.push(delta);
+          windowStats.push(delta);
+          windowMs += delta;
+        }
+      }
+      lastFrameAt = now;
+
+      if (status === 'gameover' && previousStatus === 'playing') {
+        logBenchmark();
+      }
+      previousStatus = status;
+
+      if (status === 'playing' && windowMs >= 5000) {
+        // Adaptation is Auto-only and manual tiers disable it entirely.
+        if (
+          fxPreferenceRef.current === 'auto' &&
+          !downgradedThisRun &&
+          controller &&
+          controller.tier !== 'off'
+        ) {
+          const p95 = windowStats.percentile(0.95);
+          const next = nextTier(controller.tier, p95);
+          if (next !== controller.tier) {
+            downgradedThisRun = true;
+            autoTier = next;
+            try {
+              controller.setPreference('auto', autoTier);
+              // Re-measure: captureDpr changed with the profile.
+              updateDimensions();
+              reportAppliedTier();
+            } catch {
+              enterFallback();
+            }
+          }
+        }
+
+        windowMs = 0;
+        windowStats = new FrameStats(600);
+      }
+
+      if (metricsEnabled && now >= nextMetricsAt) {
+        nextMetricsAt = now + 500;
+        publishMetrics();
+      }
+    };
+
+    const renderAndRecord = (snapshot: SceneSnapshot) => {
+      try {
+        controller?.render(snapshot);
+      } catch {
+        enterFallback();
+        return;
+      }
+      updateRibbonLabel(snapshot);
+      recordFrame(snapshot);
+    };
+
+    const renderFrozenFallback = () => {
+      if (!frozen || glVisible) {
+        return;
+      }
+
+      const ctx = sceneCanvas.getContext('2d');
+      if (!ctx) {
+        return;
+      }
+
+      try {
+        if (currentGameRect) {
+          engine.render(
+            ctx,
+            currentGameRect.width,
+            currentGameRect.height,
+            visibleDpr()
+          );
+        } else {
+          engine.render(ctx, WORLD_WIDTH, WORLD_HEIGHT, visibleDpr());
+        }
+      } catch {
+        // A mock/partial 2D context must not break mounting; the real scene
+        // renderer throws only in environments without a usable context.
+      }
+    };
+
     const sizeFallback = () => {
       const rect = container.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
         const gameRect = computeGameRect(rect.width, rect.height);
+        currentGameRect = gameRect;
+        currentStageWidth = rect.width;
+        currentStageHeight = rect.height;
         positionScene(gameRect);
         engine.resize(gameRect.width, gameRect.height, visibleDpr());
       } else {
         // Unmeasured (jsdom / first paint): keep the exact 360x640 2D look.
+        currentGameRect = null;
+        currentStageWidth = 0;
+        currentStageHeight = 0;
         engine.resize(WORLD_WIDTH, WORLD_HEIGHT, visibleDpr());
       }
     };
 
     const showSceneOnly = () => {
       glVisible = false;
-      engine.afterRender = undefined;
+      // Keep a metrics-only hook in QA modes so ?debug still reports frame
+      // stats on the 2D fallback; the default build keeps afterRender unset.
+      engine.afterRender = metricsEnabled ? recordFrame : undefined;
       engine.backgroundVisible = true;
       // The Canvas 2D renderer draws the badge again, so the DOM label must
       // never duplicate or replace it in fallback/Off mode.
@@ -279,6 +510,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const stageH = rect.height;
       currentGameRect = null;
       currentStageWidth = 0;
+      currentStageHeight = 0;
 
       if (!(stageW > 0 && stageH > 0)) {
         // Unmeasured: skip GL resize/rendering and keep the 2D fallback at the
@@ -293,6 +525,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const gameRect = computeGameRect(stageW, stageH);
       currentGameRect = gameRect;
       currentStageWidth = stageW;
+      currentStageHeight = stageH;
       positionScene(gameRect);
 
       if (!controller || !available) {
@@ -358,15 +591,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       // dashed line and the DOM label supplies the text.
       engine.ribbonLabelDom = true;
       updateRibbonLabel(firstFrameSnapshot);
-      engine.afterRender = (snapshot) => {
-        try {
-          controller?.render(snapshot);
-        } catch {
-          enterFallback();
-          return;
-        }
-        updateRibbonLabel(snapshot);
-      };
+      engine.afterRender = renderAndRecord;
       if (!disposed) {
         setGlActive(true);
       }
@@ -374,8 +599,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       // Start the idle rAF loop so the start screen shows the animated
       // full-bleed background and idle fish before the first tap. This is
       // idempotent and only runs on the GL path; the 2D fallback keeps
-      // today's start-screen behaviour.
-      engine.startLoop();
+      // today's start-screen behaviour. `?freeze` intentionally does not
+      // start it so the fixture frame stays static for screenshots.
+      if (!frozen) {
+        engine.startLoop();
+      }
     };
 
     /**
@@ -485,16 +713,24 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       reportAppliedTier();
     };
 
+    const handleResize = () => {
+      updateDimensions();
+      // The fallback has no rAF loop in non-GL mode; a frozen 2D fixture still
+      // needs one repaint after the resize so the static frame is visible.
+      renderFrozenFallback();
+    };
+
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(updateDimensions);
+      resizeObserver = new ResizeObserver(handleResize);
       resizeObserver.observe(container);
     } else {
-      window.addEventListener('resize', updateDimensions);
+      window.addEventListener('resize', handleResize);
     }
 
     applyPreferenceRef.current = applyPreference;
     applyPreference(fxPreferenceRef.current);
+    renderFrozenFallback();
 
     return () => {
       disposed = true;
@@ -505,7 +741,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       if (resizeObserver) {
         resizeObserver.disconnect();
       } else {
-        window.removeEventListener('resize', updateDimensions);
+        window.removeEventListener('resize', handleResize);
       }
 
       available = false;
@@ -537,6 +773,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
+      return;
+    }
+
+    // `?freeze` is a static inspection mode: no tap/key handler may unpause the
+    // fixture or start a run, otherwise the frame would stop being reproducible.
+    if (qaFlags.freeze) {
       return;
     }
 
@@ -582,7 +824,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       container.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [engine]);
+  }, [engine, qaFlags.freeze]);
 
   return (
     <div

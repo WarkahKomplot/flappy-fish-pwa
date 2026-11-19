@@ -450,6 +450,17 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       expect(screen.getByTestId('start-screen')).toBeDefined();
     });
 
+    it('skips the start screen and shows the debug overlay in QA modes', () => {
+      window.history.replaceState({}, '', '/?freeze=1&debug=1');
+      try {
+        render(<App />);
+        expect(screen.queryByTestId('start-screen')).toBeNull();
+        expect(screen.getByTestId('debug-overlay')).toBeDefined();
+      } finally {
+        window.history.replaceState({}, '', '/');
+      }
+    });
+
     it('persists the selected Off preference and restores it on a new session', () => {
       const first = render(<App />);
 
