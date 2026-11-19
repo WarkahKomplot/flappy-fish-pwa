@@ -91,6 +91,18 @@ export class GameEngine {
   /** One-shot render moments drained by the compositor each frame. */
   public events: RenderEvent[] = [];
 
+  /**
+   * When false the Canvas 2D background fill is skipped so the WebGL
+   * compositor can own the full-bleed background. Always true in fallback.
+   */
+  public backgroundVisible: boolean = true;
+
+  /**
+   * Optional post-render hook for the WebGL compositor. It is cleared if the
+   * renderer throws so the game falls back to plain Canvas 2D and keeps going.
+   */
+  public afterRender?: (snapshot: SceneSnapshot) => void;
+
   private canvas: HTMLCanvasElement | null = null;
   private canvasCtx: CanvasRenderingContext2D | null = null;
   private animationFrameId: number | null = null;
@@ -565,6 +577,26 @@ export class GameEngine {
   }
 
   /**
+   * Advances the simulation and renders one frame.
+   *
+   * Update errors propagate normally; only the render/compositor portion is
+   * guarded so a failed GL renderer falls back instead of killing the loop.
+   */
+  public frame(dtFrames: number): void {
+    this.update(dtFrames);
+
+    try {
+      if (this.canvasCtx) {
+        this.render(this.canvasCtx, this.displayWidth, this.displayHeight, this.dpr);
+      }
+      this.afterRender?.(this.getSceneSnapshot());
+    } catch {
+      this.afterRender = undefined;
+      this.backgroundVisible = true;
+    }
+  }
+
+  /**
    * Renders the complete game scene to Canvas 2D.
    * Handles Retina/High-DPI DPR scaling (Review Focus 3).
    */
@@ -586,7 +618,9 @@ export class GameEngine {
     ctx.scale(scaleX, scaleY);
 
     // 1. Deep-sea background gradient & sunbeams
-    this.drawBackground(ctx);
+    if (this.backgroundVisible) {
+      this.drawBackground(ctx);
+    }
 
     // 2. Ambient particles & motes
     this.particles.render(ctx);
@@ -912,11 +946,9 @@ export class GameEngine {
     const dtSeconds = Math.min(elapsed / 1000, 0.1);
     const dtFrames = dtSeconds * 60;
 
-    this.update(dtFrames);
-
-    if (this.canvasCtx) {
-      this.render(this.canvasCtx, this.displayWidth, this.displayHeight, this.dpr);
-    }
+    // frame() guards only render/afterRender, so a compositor throw cannot
+    // stop the rAF loop and the simulation keeps advancing.
+    this.frame(dtFrames);
 
     this.animationFrameId = requestAnimationFrame(this.loop);
   };
