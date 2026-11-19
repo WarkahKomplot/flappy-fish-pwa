@@ -574,7 +574,19 @@ it('routes stage taps to the engine', () => {
   expect(spy).toHaveBeenCalled();
   engine.destroy();
 });
+it('reveals the 2D scene if the GL frame throws', () => {
+  const engine = new GameEngine({ soundEffects: mockSounds });
+  const throwing = fakeBackendThatThrowsOnRender(); // init true, beginFrame throws
+  render(<GameCanvas engine={engine} backendFactory={() => throwing} />);
+  // The mount effect installs afterRender; drive one frame.
+  act(() => { engine.frame(1); });
+  expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+  expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+  engine.destroy();
+});
 ```
+
+`ribbonLabelDom` is introduced in Task 11; **do not reference it in Task 6** — this keeps Task 6's typecheck green. Task 11 adds the flag and sets it when GL is active / resets it in `useFallback`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -602,7 +614,7 @@ const autoTier = ok
 controller.setPreference(fxPreference, autoTier);
 ```
 
-If `backendFactory` is absent, use `() => null` until Task 7 imports the real backend. On no backend or failed `controller.init`, call `useFallback()` and `onEffectiveTierChange?.('off')`: show scene, hide FX, set `backgroundVisible = true`, `engine.ribbonLabelDom = false`, `engine.afterRender = undefined`, `engine.resize(gameW, gameH, dpr)`. On success: hide scene (`opacity:0`), show FX, `backgroundVisible=false`, `ribbonLabelDom=true`, set `afterRender` to a try/catch that calls `controller.render(snapshot)` and calls `useFallback()` on throw. Report `controller` tier changes through `onEffectiveTierChange`.
+If `backendFactory` is absent, use `() => null` until Task 7 imports the real backend. On no backend or failed `controller.init`, call `useFallback()` and `onEffectiveTierChange?.('off')`: show scene, hide FX, set `backgroundVisible = true`, `engine.afterRender = undefined`, `engine.resize(gameW, gameH, dpr)`. On success: hide scene (`opacity:0`), show FX, `backgroundVisible=false`, set `afterRender` to a try/catch that calls `controller.render(snapshot)` and calls `useFallback()` on throw. Report `controller` tier changes through `onEffectiveTierChange`.
 
 ResizeObserver recomputes the stage. **If `stageW` or `stageH` is 0** (unmeasured/jsdom), skip `controller.resize` and GL rendering and keep the 2D fallback at 360×640 until measured. Otherwise compute `gameRect`; in GL mode enforce the capture cap by calling `computeCaptureSize(gameRect, profile.captureDpr)` and resizing the scene buffer to `engine.resize(capture.width, capture.height, 1)` (the scene texture is that capped buffer; the backend samples it into the game rect). Set the scene canvas CSS to the game rect and call `controller.resize(stageW, stageH, gameRect)`. In fallback call `engine.resize(gameW, gameH, visibleDpr)`. Update `tests/ui.test.tsx`'s `getContext` stub to return `null` for `'webgl2'`.
 
