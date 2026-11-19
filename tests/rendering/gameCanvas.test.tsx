@@ -340,6 +340,10 @@ describe('GameCanvas two-canvas structure and fallback', () => {
       captureVisibility.push(engine.backgroundVisible);
       originalRender(ctx, width, height, dpr);
     });
+    // The capture must be the render half only; engine.frame(0) would tick
+    // update() and show up here even though dt is zero.
+    const updateSpy = vi.spyOn(engine, 'update');
+    const gameTimeBefore = engine.gameTime;
 
     render(
       <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
@@ -347,6 +351,8 @@ describe('GameCanvas two-canvas structure and fallback', () => {
 
     expect(events.slice(0, 3)).toEqual(['render', 'beginFrame', 'composite']);
     expect(captureVisibility[0]).toBe(false);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(engine.gameTime).toBe(gameTimeBefore);
     expect(engine.backgroundVisible).toBe(false);
     expect(triggerResize).not.toBeNull();
 
@@ -357,6 +363,8 @@ describe('GameCanvas two-canvas structure and fallback', () => {
 
     expect(events.slice(0, 3)).toEqual(['render', 'beginFrame', 'composite']);
     expect(captureVisibility[captureVisibility.length - 1]).toBe(false);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(engine.gameTime).toBe(gameTimeBefore);
     expect(backend.beginFrame).toHaveBeenCalledTimes(2);
     expect(engine.backgroundVisible).toBe(false);
   });

@@ -119,8 +119,10 @@ function createTrackedFakeGl(overrides: Record<string, unknown> = {}): {
   drawStates: DrawState[];
 } {
   const attachments = new Map<unknown, unknown>();
+  // 0x84c0 is gl.TEXTURE0, which is also the default active texture unit.
+  const textureUnit0 = 0x84c0;
   let boundFramebuffer: unknown = null;
-  let activeUnit = 0;
+  let activeUnit = textureUnit0;
   let boundTexture0: unknown = null;
   const drawStates: DrawState[] = [];
 
@@ -142,7 +144,7 @@ function createTrackedFakeGl(overrides: Record<string, unknown> = {}): {
       activeUnit = unit;
     }),
     bindTexture: vi.fn((_target: unknown, texture: unknown) => {
-      if (activeUnit === 0) {
+      if (activeUnit === textureUnit0) {
         boundTexture0 = texture;
       }
     }),
@@ -358,11 +360,16 @@ describe('WebGLBackend resources and colour contract', () => {
 
     // background + scene + bright + 3x(H+V) + 2 upsamples + composite.
     expect(drawStates).toHaveLength(12);
+    expect(drawStates.some((draw) => draw.texture !== null)).toBe(true);
     for (const draw of drawStates) {
       if (draw.framebuffer) {
         expect(draw.texture).not.toBe(draw.attachment);
       }
     }
+
+    // Additive upsample is pinned to ONE/ONE at half weight.
+    expect(gl.blendFunc).toHaveBeenCalledWith(gl.ONE, gl.ONE);
+    expect(uniform1fValue(gl, 'uWeight')).toBe(0.5);
 
     // RGBA8 fallback: 4x headroom, 4x bloom scale and a 1/255 ordered dither.
     expect(uniform1fValue(gl, 'uHeadroom')).toBe(4);
