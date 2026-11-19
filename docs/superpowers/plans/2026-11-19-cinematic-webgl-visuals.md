@@ -575,6 +575,7 @@ it('routes stage taps to the engine', () => {
   engine.destroy();
 });
 it('reveals the 2D scene if the GL frame throws', () => {
+  mockMeasuredStage(); // 390×844
   const engine = new GameEngine({ soundEffects: mockSounds });
   const throwing = fakeBackendThatThrowsOnRender(); // init true, beginFrame throws
   render(<GameCanvas engine={engine} backendFactory={() => throwing} />);
@@ -584,7 +585,29 @@ it('reveals the 2D scene if the GL frame throws', () => {
   expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
   engine.destroy();
 });
+it('reports Off and keeps the 2D scene when the preference is High but no backend exists', () => {
+  const onTier = vi.fn();
+  const engine = new GameEngine({ soundEffects: mockSounds });
+  render(<GameCanvas engine={engine} fxPreference="high" backendFactory={() => null} onEffectiveTierChange={onTier} />);
+  expect(onTier).toHaveBeenLastCalledWith('off');
+  expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+  engine.destroy();
+});
+it('falls back if controller.resize throws', () => {
+  mockMeasuredStage();
+  const engine = new GameEngine({ soundEffects: mockSounds });
+  const throwing = fakeBackendThatThrowsOnResize(); // init true, resize throws
+  render(<GameCanvas engine={engine} backendFactory={() => throwing} />);
+  expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+  expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+  engine.destroy();
+});
 ```
+
+Define `mockMeasuredStage()`, `fakeBackendThatThrowsOnRender()` and
+`fakeBackendThatThrowsOnResize()` in the test file. The fakes implement
+`PostFXBackend`: `init` returns true, `resize`/`beginFrame` throw where named,
+all other methods are `vi.fn()`s.
 
 `ribbonLabelDom` is introduced in Task 11; **do not reference it in Task 6** — this keeps Task 6's typecheck green. Task 11 adds the flag and sets it when GL is active / resets it in `useFallback`.
 
@@ -614,9 +637,9 @@ const autoTier = ok
 controller.setPreference(fxPreference, autoTier);
 ```
 
-If `backendFactory` is absent, use `() => null` until Task 7 imports the real backend. On no backend or failed `controller.init`, call `useFallback()` and `onEffectiveTierChange?.('off')`: show scene, hide FX, set `backgroundVisible = true`, `engine.afterRender = undefined`, `engine.resize(gameW, gameH, dpr)`. On success: hide scene (`opacity:0`), show FX, `backgroundVisible=false`, set `afterRender` to a try/catch that calls `controller.render(snapshot)` and calls `useFallback()` on throw. Report `controller` tier changes through `onEffectiveTierChange`.
+If `backendFactory` is absent, use `() => null` until Task 7 imports the real backend. On no backend or failed `controller.init`, call `useFallback()` and `onEffectiveTierChange?.('off')`: show scene, hide FX, set `backgroundVisible = true`, `engine.afterRender = undefined`, `engine.resize(gameW, gameH, dpr)`, and dispose the controller in a try/catch. **If init failed or the factory returned null, do not call `controller.setPreference` later** — keep the effective tier Off; the stored preference is retried on the next load. On success: hide scene (`opacity:0`), show FX, `backgroundVisible=false`, set `afterRender` to a try/catch that calls `controller.render(snapshot)` and calls `useFallback()` on throw. Call `controller.setPreference` and `controller.resize` inside their own try/catch; a throw calls `useFallback()`. `useFallback()` must call `onEffectiveTierChange('off')` last, so the UI cannot show a non-Off tier after a failure. Report controller tier changes through `onEffectiveTierChange` only while the controller is available.
 
-ResizeObserver recomputes the stage. **If `stageW` or `stageH` is 0** (unmeasured/jsdom), skip `controller.resize` and GL rendering and keep the 2D fallback at 360×640 until measured. Otherwise compute `gameRect`; in GL mode enforce the capture cap by calling `computeCaptureSize(gameRect, profile.captureDpr)` and resizing the scene buffer to `engine.resize(capture.width, capture.height, 1)` (the scene texture is that capped buffer; the backend samples it into the game rect). Set the scene canvas CSS to the game rect and call `controller.resize(stageW, stageH, gameRect)`. In fallback call `engine.resize(gameW, gameH, visibleDpr)`. Update `tests/ui.test.tsx`'s `getContext` stub to return `null` for `'webgl2'`.
+ResizeObserver recomputes the stage. **If `stageW` or `stageH` is 0** (unmeasured/jsdom), skip `controller.resize` and GL rendering and keep the 2D fallback at 360×640 until measured. For GL-path tests, mock the stage's `getBoundingClientRect` to a measured 390×844; fallback tests leave it 0. Otherwise compute `gameRect`; in GL mode enforce the capture cap by calling `computeCaptureSize(gameRect, profile.captureDpr)` and resizing the scene buffer to `engine.resize(capture.width, capture.height, 1)` (the scene texture is that capped buffer; the backend samples it into the game rect). Set the scene canvas CSS to the game rect and call `controller.resize(stageW, stageH, gameRect)`. In fallback call `engine.resize(gameW, gameH, visibleDpr)`. Update `tests/ui.test.tsx`'s `getContext` stub to return `null` for `'webgl2'`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -667,7 +690,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement the GL foundation**
 
-`glUtils`: `compileShader(gl, type, source)`, `createProgram(gl, vs, fs)`, `createQuad(gl)`, `createTexture(gl)`, `createFbo(gl, w, h, internalFormat)`, `uploadCanvas(gl, texture, canvas)`. `webglBackend.init`: get context with `{ alpha:false, antialias:false, depth:false, stencil:false, powerPreference:'high-performance' }`, feature-detect, compile the background and scene programs, create a full-screen quad, return false on any throw. `resize` sets the canvas buffer from `stageW/H × profile.postDpr` capped by `maxPostPixels`, viewport, and recreates the scene FBO. `background` draws the full-screen triangle with the world mapping uniforms. `scene` uploads the scene canvas and draws a quad into `uGameRect` (clip-space conversion: `x = (gx/stageW)*2-1`, etc.), alpha-blended; `beginFrame` binds the scene FBO and clears; `composite` blits/draws the scene FBO to the default framebuffer (no bloom yet); `effects`/`bloom` are no-ops until Task 8; `endFrame` is a no-op. `dispose` deletes programs/textures/FBOs.
+`glUtils`: `compileShader(gl, type, source)`, `createProgram(gl, vs, fs)`, `createQuad(gl)`, `createTexture(gl)`, `createFbo(gl, w, h, internalFormat)`, `uploadCanvas(gl, texture, canvas)`. `webglBackend.init`: get context with `{ alpha:false, antialias:false, depth:false, stencil:false, powerPreference:'high-performance' }`, feature-detect, compile the background and scene programs, create a full-screen quad, return false on any throw. `resize` sets the canvas buffer from `stageW/H × profile.postDpr` capped by `maxPostPixels`, viewport, and recreates the scene FBO. `background` draws the full-screen triangle with the world mapping uniforms. `scene` uploads the scene canvas and draws a quad into `uGameRect` (clip-space conversion: `x = (gx/stageW)*2-1`, etc.), alpha-blended; `beginFrame` binds the scene FBO and clears; `composite` blits/draws the scene FBO to the default framebuffer (no bloom yet); `effects`/`bloom` are no-ops until Task 8; `endFrame` is a no-op. `dispose` deletes programs/textures/FBOs and is **idempotent** (safe on a partially-initialised backend and safe to call twice).
 
 - [ ] **Step 4: Manual visual verification**
 
@@ -804,7 +827,7 @@ Expected: FAIL — components missing.
 
 - [ ] **Step 3: Implement the panel and wiring**
 
-`FxPanel` is a z-50 modal with a `role="dialog"`, five `role="radio"` buttons (`data-testid="fx-option-<value>"`), `aria-checked`, an effective-tier line (`data-testid="fx-effective-tier"`), Escape/backdrop close and focus return. StartScreen adds `data-testid="fx-open-button"` with `stopPropagation`; HUD adds the same when paused. `App` loads/saves via `fxSettings`, renders the panel, passes `onOpenFx` to both, and passes `fxPreference`/`onEffectiveTierChange` to `GameCanvas`. `GameCanvas` calls `controller.setPreference(pref, autoTier)` and, if the switch fails, calls `onEffectiveTierChange('off')` and shows the 2D fallback; the panel then displays Off.
+`FxPanel` is a z-50 modal with a `role="dialog"`, five `role="radio"` buttons (`data-testid="fx-option-<value>"`), `aria-checked`, an effective-tier line (`data-testid="fx-effective-tier"`), Escape/backdrop close and focus return. StartScreen adds `data-testid="fx-open-button"` with `stopPropagation`; HUD adds the same when paused. `App` loads/saves via `fxSettings`, renders the panel, passes `onOpenFx` to both, and passes `fxPreference`/`onEffectiveTierChange` to `GameCanvas`. `GameCanvas` calls `controller.setPreference(pref, autoTier)` **only when the controller initialised successfully**, inside a try/catch; if the switch fails, it calls `onEffectiveTierChange('off')` and shows the 2D fallback. Selecting a higher tier after a failed init must not make the UI report a working GL tier; the panel then displays Off.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
