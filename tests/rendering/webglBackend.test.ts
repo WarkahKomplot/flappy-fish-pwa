@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WebGLBackend } from '../../src/game/rendering/webglBackend';
 import { compileShader, createProgram } from '../../src/game/rendering/glUtils';
-import { QUALITY_PROFILES } from '../../src/game/rendering/quality';
-import type { SceneSnapshot } from '../../src/game/rendering/types';
+import { QUALITY_PROFILES, getQualityProfile } from '../../src/game/rendering/quality';
+import type { SceneSnapshot, RenderEvent } from '../../src/game/rendering/types';
 import type { GameRect } from '../../src/game/rendering/geometry';
 
 /**
@@ -106,17 +106,32 @@ interface DrawState {
   framebuffer: unknown;
   texture: unknown;
   attachment: unknown;
+  program: unknown;
+  uniforms: Record<string, number | number[]>;
+  blend: { src: number; dst: number } | null;
+  vertexArray: unknown;
+  first: number;
+  count: number;
+}
+
+interface BufferUpload {
+  target: unknown;
+  data: Float32Array;
+  usage: unknown;
 }
 
 /**
  * Wraps `createFakeGl` with the state a real driver enforces: every draw is
- * recorded with the bound framebuffer, the texture on unit 0, and that
- * framebuffer's colour attachment. This lets the bloom tests assert there is
- * no sampled-texture-equals-bound-attachment feedback loop.
+ * recorded with the bound framebuffer, the texture on unit 0, that
+ * framebuffer's colour attachment, the active program's uniforms at draw
+ * time, the blend mode, and the vertex range. This lets the bloom tests
+ * assert there is no sampled-texture-equals-bound-attachment feedback loop
+ * and the effects tests assert what each sprite/particle draw actually saw.
  */
 function createTrackedFakeGl(overrides: Record<string, unknown> = {}): {
   gl: FakeGl;
   drawStates: DrawState[];
+  bufferUploads: BufferUpload[];
 } {
   const attachments = new Map<unknown, unknown>();
   // 0x84c0 is gl.TEXTURE0, which is also the default active texture unit.
@@ -124,7 +139,21 @@ function createTrackedFakeGl(overrides: Record<string, unknown> = {}): {
   let boundFramebuffer: unknown = null;
   let activeUnit = textureUnit0;
   let boundTexture0: unknown = null;
+  let currentProgram: unknown = null;
+  let currentUniforms: Record<string, number | number[]> = {};
+  let boundVertexArray: unknown = null;
+  let blendSrc = 0;
+  let blendDst = 0;
+  let blendEnabled = false;
   const drawStates: DrawState[] = [];
+  const bufferUploads: BufferUpload[] = [];
+
+  const setUniform = (location: unknown, value: number | number[]): void => {
+    const name = (location as { name?: string } | null)?.name;
+    if (name) {
+      currentUniforms[name] = Array.isArray(value) ? value.slice() : value;
+    }
+  };
 
   const gl = createFakeGl({
     framebufferTexture2D: vi.fn(
@@ -148,17 +177,63 @@ function createTrackedFakeGl(overrides: Record<string, unknown> = {}): {
         boundTexture0 = texture;
       }
     }),
-    drawArrays: vi.fn(() => {
+    useProgram: vi.fn((program: unknown) => {
+      currentProgram = program;
+      currentUniforms = {};
+    }),
+    uniform1f: vi.fn((location: unknown, x: number) => {
+      setUniform(location, x);
+    }),
+    uniform1i: vi.fn((location: unknown, x: number) => {
+      setUniform(location, x);
+    }),
+    uniform2f: vi.fn((location: unknown, x: number, y: number) => {
+      setUniform(location, [x, y]);
+    }),
+    uniform4f: vi.fn(
+      (location: unknown, x: number, y: number, z: number, w: number) => {
+        setUniform(location, [x, y, z, w]);
+      }
+    ),
+    bindVertexArray: vi.fn((vao: unknown) => {
+      boundVertexArray = vao;
+    }),
+    enable: vi.fn((cap: number) => {
+      if (cap === 0x0be2) {
+        blendEnabled = true;
+      }
+    }),
+    disable: vi.fn((cap: number) => {
+      if (cap === 0x0be2) {
+        blendEnabled = false;
+      }
+    }),
+    blendFunc: vi.fn((src: number, dst: number) => {
+      blendSrc = src;
+      blendDst = dst;
+    }),
+    bufferData: vi.fn(
+      (target: unknown, data: Float32Array, usage: unknown) => {
+        bufferUploads.push({ target, data, usage });
+      }
+    ),
+    drawArrays: vi.fn((_mode: number, first: number, count: number) => {
       drawStates.push({
         framebuffer: boundFramebuffer,
         texture: boundTexture0,
         attachment: attachments.get(boundFramebuffer),
+        program: currentProgram,
+        uniforms: { ...currentUniforms },
+        blend: blendEnabled ? { src: blendSrc, dst: blendDst } : null,
+        vertexArray: boundVertexArray,
+        first,
+        count,
       });
     }),
     ...overrides,
   });
 
-  return { gl, drawStates };
+  return { gl, drawStates, bufferUploads };
 }
 
 function mocked(fn: unknown): ReturnType<typeof vi.fn> {
@@ -214,6 +289,116 @@ function initBackend(gl: FakeGl): {
 
 const PROFILE = QUALITY_PROFILES.high;
 const GAME_RECT: GameRect = { x: 0, y: 75.5, width: 390, height: 693 };
+
+/** Device game rect for the 390x844 stage; the post cap does not bite here. */
+function gameRectFor(profile: (typeof QUALITY_PROFILES)[keyof typeof QUALITY_PROFILES]): GameRect {
+  return {
+    x: 0,
+    y: 75.5 * profile.postDpr,
+    width: 390 * profile.postDpr,
+    height: 693 * profile.postDpr,
+  };
+}
+
+function worldToDevice(
+  profile: (typeof QUALITY_PROFILES)[keyof typeof QUALITY_PROFILES],
+  snapshot: SceneSnapshot,
+  x: number,
+  y: number
+): { x: number; y: number } {
+  const rect = gameRectFor(profile);
+  return {
+    x: rect.x + (x / snapshot.world.width) * rect.width,
+    y: rect.y + (y / snapshot.world.height) * rect.height,
+  };
+}
+
+function makeFxSnapshot(overrides: Partial<SceneSnapshot> = {}): SceneSnapshot {
+  return { ...makeSnapshot(), time: 2, ...overrides };
+}
+
+/** Two pearls, two jellyfish, an active shield, and one of each event. */
+function makeRichFxSnapshot(): SceneSnapshot {
+  return makeFxSnapshot({
+    time: 10,
+    obstacles: [
+      {
+        x: 100,
+        width: 44,
+        topHeight: 120,
+        bottomY: 300,
+        pearl: {
+          x: 120,
+          y: 200,
+          visualY: 210,
+          radius: 12,
+          collected: false,
+          missed: false,
+        },
+      },
+      {
+        x: 260,
+        width: 44,
+        topHeight: 160,
+        bottomY: 340,
+        pearl: {
+          x: 280,
+          y: 240,
+          visualY: 236,
+          radius: 12,
+          collected: false,
+          missed: false,
+        },
+      },
+    ],
+    shield: { active: true, activeTime: 0.6 },
+    events: [
+      { type: 'hit', x: 40, y: 520, t: 9.9 },
+      { type: 'shield-pop', x: 90, y: 540, t: 9.8 },
+      { type: 'best', x: 140, y: 560, t: 9.7 },
+      { type: 'pearl', x: 190, y: 580, t: 9.6 },
+    ],
+  });
+}
+
+function uniformNumber(draw: DrawState, name: string): number | undefined {
+  const value = draw.uniforms[name];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function uniformPair(draw: DrawState, name: string): number[] | null {
+  const value = draw.uniforms[name];
+  return Array.isArray(value) ? value : null;
+}
+
+function spriteDraws(draws: DrawState[]): DrawState[] {
+  return draws.filter((draw) => Array.isArray(draw.uniforms.uColor));
+}
+
+function particleDraws(draws: DrawState[]): DrawState[] {
+  return draws.filter((draw) => Array.isArray(draw.uniforms.uFish));
+}
+
+function spriteAt(draws: DrawState[], x: number, y: number): DrawState | undefined {
+  return spriteDraws(draws).find((draw) => {
+    const center = uniformPair(draw, 'uCenter');
+    return (
+      center !== null &&
+      Math.abs(center[0] - x) < 0.01 &&
+      Math.abs(center[1] - y) < 0.01
+    );
+  });
+}
+
+function colorMatches(draw: DrawState, rgb: readonly number[]): boolean {
+  const color = uniformPair(draw, 'uColor');
+  return (
+    color !== null &&
+    Math.abs(color[0] - rgb[0]) < 1e-6 &&
+    Math.abs(color[1] - rgb[1]) < 1e-6 &&
+    Math.abs(color[2] - rgb[2]) < 1e-6
+  );
+}
 
 describe('WebGLBackend init failure containment', () => {
   it('returns false for a missing context', () => {
@@ -495,6 +680,404 @@ describe('WebGLBackend resources and colour contract', () => {
     expect(uniform1fValue(gl, 'uBloomEnabled')).toBe(0);
 
     backend.dispose();
+  });
+});
+
+describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
+  it('draws no effects on the Low tier even if effects() is called directly', () => {
+    const { gl, drawStates } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeRichFxSnapshot();
+
+    backend.resize(390, 844, GAME_RECT, QUALITY_PROFILES.low);
+    backend.beginFrame(snapshot, QUALITY_PROFILES.low);
+    const before = drawStates.length;
+
+    backend.effects(snapshot, QUALITY_PROFILES.low);
+
+    expect(drawStates.length).toBe(before);
+    backend.dispose();
+  });
+
+  it.each(['high', 'medium'] as const)(
+    'draws glows, layered particles, the shield and every event ring on %s',
+    (tier) => {
+      const profile = QUALITY_PROFILES[tier];
+      const { gl, drawStates } = createTrackedFakeGl();
+      const { backend } = initBackend(gl);
+      const snapshot = makeRichFxSnapshot();
+
+      backend.resize(390, 844, GAME_RECT, profile);
+      backend.beginFrame(snapshot, profile);
+      const before = drawStates.length;
+
+      backend.effects(snapshot, profile);
+
+      const fx = drawStates.slice(before);
+      expect(fx.length).toBeGreaterThan(7);
+      // Effects always target the scene FBO, so bloom sees them.
+      expect(fx.every((draw) => draw.framebuffer !== null)).toBe(true);
+      // Additive light, never alpha-over or a luminance flash.
+      expect(fx.every((draw) => draw.blend?.src === 1 && draw.blend?.dst === 1)).toBe(
+        true
+      );
+
+      const sprites = spriteDraws(fx);
+      const particles = particleDraws(fx);
+      const rect = gameRectFor(profile);
+
+      // Two depth layers: back silt then front silt/trail, nothing re-allocated.
+      expect(particles).toHaveLength(2);
+      expect(particles.reduce((sum, draw) => sum + draw.count, 0)).toBe(
+        profile.particleCount * 6
+      );
+      expect(particles[0].first).toBe(0);
+      expect(particles[1].first).toBe(particles[0].count);
+      // Layer draws share the world's hit shake, if any.
+      expect(uniformPair(particles[1], 'uShake')).toEqual(
+        uniformPair(particles[0], 'uShake')
+      );
+
+      // Pearl glow at visualY (not the base pearl.y), jellyfish glow at bottomY.
+      const pearlOne = worldToDevice(profile, snapshot, 120, 210);
+      const pearlTwo = worldToDevice(profile, snapshot, 280, 236);
+      const jellyOne = worldToDevice(profile, snapshot, 122, 300);
+      const jellyTwo = worldToDevice(profile, snapshot, 282, 340);
+      expect(spriteAt(fx, pearlOne.x, pearlOne.y)).toBeDefined();
+      expect(spriteAt(fx, pearlTwo.x, pearlTwo.y)).toBeDefined();
+      expect(spriteAt(fx, jellyOne.x, jellyOne.y)).toBeDefined();
+      expect(spriteAt(fx, jellyTwo.x, jellyTwo.y)).toBeDefined();
+
+      // Shield rim/ring at the fish: no full-screen lens warp, a local sprite.
+      const fish = worldToDevice(profile, snapshot, snapshot.fish.x, snapshot.fish.y);
+      const shieldDraws = sprites.filter((draw) => {
+        const center = uniformPair(draw, 'uCenter');
+        return (
+          center !== null &&
+          Math.abs(center[0] - fish.x) < 0.01 &&
+          Math.abs(center[1] - fish.y) < 0.01
+        );
+      });
+      expect(shieldDraws).toHaveLength(2);
+      const shieldRing = shieldDraws.find(
+        (draw) => uniformNumber(draw, 'uKind') === 1
+      );
+      expect(shieldRing).toBeDefined();
+      expect(colorMatches(shieldRing!, [0.4, 0.92, 1])).toBe(true);
+      const shieldSize = uniformPair(shieldRing!, 'uSize')!;
+      expect(shieldSize[0]).toBe(shieldSize[1]);
+      expect(shieldSize[0]).toBeGreaterThan(0);
+      expect(shieldSize[0]).toBeLessThan(rect.width);
+
+      // All four one-shot events map to a draw at their own position.
+      for (const event of snapshot.events) {
+        const point = worldToDevice(profile, snapshot, event.x, event.y);
+        expect(spriteAt(fx, point.x, point.y)).toBeDefined();
+      }
+
+      // No lens/warp uniform reaches any effects draw.
+      expect(fx.every((draw) => draw.uniforms.uWarp === undefined)).toBe(true);
+      backend.dispose();
+    }
+  );
+
+  it('maps each event type to its ring or pulse and ignores 500 ms-old events', () => {
+    const profile = QUALITY_PROFILES.high;
+    const { gl, drawStates } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const events: RenderEvent[] = [
+      { type: 'hit', x: 30, y: 500, t: 9.95 },
+      { type: 'shield-pop', x: 70, y: 520, t: 9.9 },
+      { type: 'best', x: 110, y: 540, t: 9.85 },
+      { type: 'pearl', x: 150, y: 560, t: 9.8 },
+      { type: 'shield-activate', x: 180, y: 570, t: 9.75 },
+      { type: 'hit', x: 210, y: 580, t: 9.4 },
+      { type: 'hit', x: 240, y: 600, t: 9.5 },
+    ];
+    const snapshot = makeFxSnapshot({ time: 10, events });
+
+    backend.resize(390, 844, GAME_RECT, profile);
+    backend.beginFrame(snapshot, profile);
+    const before = drawStates.length;
+    backend.effects(snapshot, profile);
+    const fx = drawStates.slice(before);
+
+    // Four live, styled events; shield-activate and both expired hits draw none.
+    expect(spriteDraws(fx)).toHaveLength(4);
+
+    const expected = [
+      { event: events[0], kind: 1, color: [1, 0.58, 0.3] },
+      { event: events[1], kind: 1, color: [0.32, 0.92, 1] },
+      { event: events[2], kind: 0, color: [1, 0.82, 0.3] },
+      { event: events[3], kind: 2, color: [1, 0.96, 0.72] },
+    ];
+
+    for (const { event, kind, color } of expected) {
+      const point = worldToDevice(profile, snapshot, event.x, event.y);
+      const draw = spriteAt(fx, point.x, point.y);
+      expect(draw).toBeDefined();
+      expect(uniformNumber(draw!, 'uKind')).toBe(kind);
+      expect(colorMatches(draw!, color)).toBe(true);
+    }
+
+    // Strict "younger than 500 ms": 0.5 s old is already gone.
+    for (const event of [events[5], events[6]]) {
+      const point = worldToDevice(profile, snapshot, event.x, event.y);
+      expect(spriteAt(fx, point.x, point.y)).toBeUndefined();
+    }
+    const activate = worldToDevice(profile, snapshot, 180, 570);
+    expect(spriteAt(fx, activate.x, activate.y)).toBeUndefined();
+
+    backend.dispose();
+  });
+
+  it('expands each one-shot ring and fades it as it ages', () => {
+    const profile = QUALITY_PROFILES.high;
+    const { gl, drawStates } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+
+    backend.resize(390, 844, GAME_RECT, profile);
+
+    const sample = (age: number): DrawState => {
+      const snapshot = makeFxSnapshot({
+        time: 5,
+        events: [{ type: 'hit', x: 60, y: 300, t: 5 - age }],
+      });
+      backend.beginFrame(snapshot, profile);
+      const before = drawStates.length;
+      backend.effects(snapshot, profile);
+      const point = worldToDevice(profile, snapshot, 60, 300);
+      const draw = spriteAt(drawStates.slice(before), point.x, point.y);
+      expect(draw).toBeDefined();
+      return draw!;
+    };
+
+    const young = sample(0.05);
+    const old = sample(0.45);
+    expect(uniformPair(old, 'uSize')![0]).toBeGreaterThan(
+      uniformPair(young, 'uSize')![0]
+    );
+    expect(uniformPair(old, 'uColor')![3]).toBeLessThan(
+      uniformPair(young, 'uColor')![3]
+    );
+
+    backend.dispose();
+  });
+
+  it('draws the shield ring at the fish only while the shield is active', () => {
+    const profile = QUALITY_PROFILES.high;
+    const { gl, drawStates } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeFxSnapshot({
+      shield: { active: false, activeTime: 0 },
+      obstacles: [],
+      events: [],
+    });
+
+    backend.resize(390, 844, GAME_RECT, profile);
+    backend.beginFrame(snapshot, profile);
+    let before = drawStates.length;
+    backend.effects(snapshot, profile);
+    expect(spriteDraws(drawStates.slice(before))).toHaveLength(0);
+
+    snapshot.shield = { active: true, activeTime: 0.4 };
+    backend.beginFrame(snapshot, profile);
+    before = drawStates.length;
+    backend.effects(snapshot, profile);
+    const shieldSprites = spriteDraws(drawStates.slice(before));
+    expect(shieldSprites).toHaveLength(2);
+
+    const fish = worldToDevice(profile, snapshot, snapshot.fish.x, snapshot.fish.y);
+    for (const draw of shieldSprites) {
+      const center = uniformPair(draw, 'uCenter');
+      expect(center![0]).toBeCloseTo(fish.x, 6);
+      expect(center![1]).toBeCloseTo(fish.y, 6);
+      // Local quad, not a full-screen warp of the fish/scene.
+      expect(uniformPair(draw, 'uSize')![0]).toBeLessThan(gameRectFor(profile).width);
+    }
+    expect(shieldSprites.some((draw) => uniformNumber(draw, 'uKind') === 1)).toBe(
+      true
+    );
+
+    backend.dispose();
+  });
+
+  it('allocates the particle pool from the profile and reallocates on tier change', () => {
+    const { gl, drawStates, bufferUploads } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeFxSnapshot();
+
+    // init uploads only the shared unit quad.
+    expect(bufferUploads).toHaveLength(1);
+    expect(bufferUploads[0].data).toHaveLength(24);
+
+    const fxOf = (tier: keyof typeof QUALITY_PROFILES): DrawState[] => {
+      const profile = QUALITY_PROFILES[tier];
+      backend.beginFrame(snapshot, profile);
+      const before = drawStates.length;
+      backend.effects(snapshot, profile);
+      return drawStates.slice(before);
+    };
+
+    backend.resize(390, 844, GAME_RECT, QUALITY_PROFILES.high);
+    expect(bufferUploads[1].data).toHaveLength(180 * 6 * 8);
+    let particle = particleDraws(fxOf('high'));
+    expect(particle.map((draw) => draw.count)).toEqual([594, 486]);
+
+    backend.resize(390, 844, GAME_RECT, QUALITY_PROFILES.medium);
+    expect(bufferUploads[2].data).toHaveLength(90 * 6 * 8);
+    expect(mocked(gl.createBuffer).mock.calls.length).toBe(3);
+    particle = particleDraws(fxOf('medium'));
+    expect(particle.map((draw) => draw.count)).toEqual([300, 240]);
+
+    backend.resize(390, 844, GAME_RECT, QUALITY_PROFILES.low);
+    expect(bufferUploads[3].data).toHaveLength(40 * 6 * 8);
+    expect(particleDraws(fxOf('low'))).toHaveLength(0);
+
+    backend.resize(390, 844, GAME_RECT, QUALITY_PROFILES.high);
+    expect(bufferUploads[4].data).toHaveLength(180 * 6 * 8);
+    particle = particleDraws(fxOf('high'));
+    expect(particle.map((draw) => draw.count)).toEqual([594, 486]);
+
+    backend.dispose();
+  });
+
+  it('never uploads or allocates particle buffers per frame', () => {
+    const { gl, drawStates, bufferUploads } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const profile = QUALITY_PROFILES.high;
+    const snapshot = makeFxSnapshot({ time: 3 });
+
+    backend.resize(390, 844, GAME_RECT, profile);
+    const uploads = bufferUploads.length;
+    const buffers = mocked(gl.createBuffer).mock.calls.length;
+    const arrays = mocked(gl.createVertexArray).mock.calls.length;
+
+    for (let i = 0; i < 30; i++) {
+      snapshot.time = 3 + i / 60;
+      backend.effects(snapshot, profile);
+    }
+
+    expect(bufferUploads.length).toBe(uploads);
+    expect(mocked(gl.createBuffer).mock.calls.length).toBe(buffers);
+    expect(mocked(gl.createVertexArray).mock.calls.length).toBe(arrays);
+
+    const times = particleDraws(drawStates).map(
+      (draw) => uniformNumber(draw, 'uTime')!
+    );
+    expect(new Set(times).size).toBe(30);
+
+    backend.dispose();
+  });
+
+  it('scales shake 1x/0.5x by tier and applies it only to world sampling', () => {
+    const render = (tier: keyof typeof QUALITY_PROFILES, age: number, reducedMotion = false) => {
+      const profile = reducedMotion
+        ? getQualityProfile(tier, true)!
+        : QUALITY_PROFILES[tier];
+      const { gl, drawStates } = createTrackedFakeGl();
+      const { backend } = initBackend(gl);
+      const snapshot = makeFxSnapshot({
+        time: 5,
+        events: [{ type: 'hit', x: 60, y: 300, t: 5 - age }],
+      });
+
+      backend.resize(390, 844, GAME_RECT, profile);
+      backend.beginFrame(snapshot, profile);
+      const before = drawStates.length;
+      backend.background(snapshot, profile);
+      backend.scene(snapshot, profile);
+      backend.effects(snapshot, profile);
+      backend.composite(snapshot, profile);
+      const draws = drawStates.slice(before);
+
+      const background = draws.find(
+        (draw) => draw.uniforms.uWorld !== undefined
+      )!;
+      const scene = draws.find(
+        (draw) => draw.uniforms.uSceneSize !== undefined
+      )!;
+      const composite = draws.find(
+        (draw) => draw.uniforms.uBloom !== undefined
+      )!;
+      const sprites = spriteDraws(draws);
+
+      backend.dispose();
+      return { background, scene, composite, sprites, profile };
+    };
+
+    const high = render('high', 0.04);
+    const highShake = uniformPair(high.background, 'uShake')!;
+    expect(Math.hypot(highShake[0], highShake[1])).toBeCloseTo(2, 6);
+    expect(uniformPair(high.scene, 'uShake')).toEqual(highShake);
+    expect(high.sprites.length).toBeGreaterThan(0);
+    for (const draw of high.sprites) {
+      expect(uniformPair(draw, 'uShake')).toEqual(highShake);
+    }
+    // The final composite is a plain tonemap: no shake/warp, so the DOM HUD
+    // (never part of the WebGL frame) cannot shake either.
+    expect(high.composite.uniforms.uShake).toBeUndefined();
+    expect(high.composite.uniforms.uWarp).toBeUndefined();
+    expect(uniformPair(high.scene, 'uGameRect')).toEqual([0, 151, 780, 1386]);
+
+    const medium = render('medium', 0.04);
+    const mediumShake = uniformPair(medium.background, 'uShake')!;
+    expect(Math.hypot(mediumShake[0], mediumShake[1])).toBeCloseTo(1, 6);
+
+    const low = render('low', 0.04);
+    expect(uniformPair(low.background, 'uShake')).toEqual([0, 0]);
+    expect(uniformPair(low.scene, 'uShake')).toEqual([0, 0]);
+
+    const reduced = render('high', 0.04, true);
+    expect(uniformPair(reduced.background, 'uShake')).toEqual([0, 0]);
+    expect(uniformPair(reduced.scene, 'uShake')).toEqual([0, 0]);
+
+    // Older than the 120 ms decay but younger than the 500 ms ring window:
+    // the world is still, while the hit ring is still visible.
+    const decayed = render('high', 0.2);
+    expect(uniformPair(decayed.background, 'uShake')).toEqual([0, 0]);
+    expect(decayed.sprites.length).toBeGreaterThan(0);
+  });
+
+  it('turns a hit into a bloom swell, never a luminance flash', () => {
+    const profile = QUALITY_PROFILES.high;
+
+    const compositeFor = (events: RenderEvent[]) => {
+      const { gl, drawStates } = createTrackedFakeGl();
+      const { backend } = initBackend(gl);
+      const snapshot = makeFxSnapshot({ time: 6, events });
+
+      backend.resize(390, 844, GAME_RECT, profile);
+      backend.beginFrame(snapshot, profile);
+      const before = drawStates.length;
+      backend.bloom(snapshot, profile);
+      backend.composite(snapshot, profile);
+      const draw = drawStates
+        .slice(before)
+        .find((state) => state.uniforms.uBloom !== undefined)!;
+
+      const result = {
+        hit: uniformNumber(draw, 'uHit')!,
+        exposure: uniformNumber(draw, 'uExposure')!,
+        bloomStrength: uniformNumber(draw, 'uBloomStrength')!,
+        bloomEnabled: uniformNumber(draw, 'uBloomEnabled')!,
+        flash: draw.uniforms.uFlash ?? draw.uniforms.uLuminance,
+      };
+      backend.dispose();
+      return result;
+    };
+
+    expect(compositeFor([]).hit).toBe(0);
+
+    const recent = compositeFor([{ type: 'hit', x: 60, y: 300, t: 5.9 }]);
+    expect(recent.hit).toBeCloseTo(0.8, 6);
+    expect(recent.exposure).toBeCloseTo(1.1, 6);
+    expect(recent.bloomStrength).toBeCloseTo(0.55, 6);
+    expect(recent.bloomEnabled).toBe(1);
+    expect(recent.flash).toBeUndefined();
+
+    // Past the one-shot window the swell is gone.
+    expect(compositeFor([{ type: 'hit', x: 60, y: 300, t: 5.4 }]).hit).toBe(0);
   });
 });
 

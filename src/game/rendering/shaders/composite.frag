@@ -10,6 +10,7 @@ uniform float uExposure;
 uniform float uBloomScale;
 uniform float uBloomStrength;
 uniform float uBloomEnabled;
+uniform float uHit;
 uniform float uVignette;
 uniform float uGrain;
 uniform float uCA;
@@ -52,7 +53,8 @@ void main() {
   }
   vec3 color = scene;
   if (uBloomEnabled > 0.5) {
-    color += texture(uBloom, vUv).rgb * uBloomScale * uBloomStrength;
+    color += texture(uBloom, vUv).rgb * uBloomScale * uBloomStrength *
+      (1.0 + uHit * 1.5);
   }
   color = acesFilm(color * uExposure);
   float l = luma(color);

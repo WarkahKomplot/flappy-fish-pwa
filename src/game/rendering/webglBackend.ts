@@ -17,12 +17,16 @@ import sceneFragSource from './shaders/scene.frag?raw';
 import brightFragSource from './shaders/bright.frag?raw';
 import blurFragSource from './shaders/blur.frag?raw';
 import compositeFragSource from './shaders/composite.frag?raw';
+import spriteVertSource from './shaders/sprite.vert?raw';
+import particleVertSource from './shaders/particle.vert?raw';
+import effectsFragSource from './shaders/effects.frag?raw';
 
 interface BackgroundUniforms {
   resolution: WebGLUniformLocation | null;
   time: WebGLUniformLocation | null;
   gameRect: WebGLUniformLocation | null;
   world: WebGLUniformLocation | null;
+  shake: WebGLUniformLocation | null;
 }
 
 interface SceneUniforms {
@@ -30,6 +34,7 @@ interface SceneUniforms {
   gameRect: WebGLUniformLocation | null;
   resolution: WebGLUniformLocation | null;
   sceneSize: WebGLUniformLocation | null;
+  shake: WebGLUniformLocation | null;
 }
 
 interface BrightUniforms {
@@ -54,6 +59,7 @@ interface CompositeUniforms {
   bloomScale: WebGLUniformLocation | null;
   bloomStrength: WebGLUniformLocation | null;
   bloomEnabled: WebGLUniformLocation | null;
+  hit: WebGLUniformLocation | null;
   vignette: WebGLUniformLocation | null;
   grain: WebGLUniformLocation | null;
   ca: WebGLUniformLocation | null;
@@ -61,6 +67,22 @@ interface CompositeUniforms {
   gradeStrength: WebGLUniformLocation | null;
   gradeShadow: WebGLUniformLocation | null;
   gradeHighlight: WebGLUniformLocation | null;
+}
+
+interface SpriteUniforms {
+  resolution: WebGLUniformLocation | null;
+  shake: WebGLUniformLocation | null;
+  center: WebGLUniformLocation | null;
+  size: WebGLUniformLocation | null;
+  color: WebGLUniformLocation | null;
+  kind: WebGLUniformLocation | null;
+}
+
+interface ParticleUniforms {
+  resolution: WebGLUniformLocation | null;
+  shake: WebGLUniformLocation | null;
+  fish: WebGLUniformLocation | null;
+  time: WebGLUniformLocation | null;
 }
 
 /** Cold deep-water clear so a dropped pass can never flash a bright frame. */
@@ -83,6 +105,54 @@ const DITHER_SCALE = 1 / 255;
 const GRADE_STRENGTH = 1.0;
 const GRADE_SHADOW = { r: 0.9, g: 1.0, b: 1.08, pivot: 0.05 };
 const GRADE_HIGHLIGHT = { r: 1.08, g: 1.0, b: 0.9, pivot: 0.9 };
+
+/** One-shot events fade out over this window; hit shake decays faster. */
+const EVENT_SECONDS = 0.5;
+const SHAKE_PX = 3;
+const SHAKE_SECONDS = 0.12;
+
+const PEARL_GLOW = [1, 0.82, 0.35, 0.9] as const;
+const JELLY_GLOW = [0.8, 0.32, 0.92, 0.62] as const;
+const SHIELD_RING = [0.4, 0.92, 1, 0.85] as const;
+const SHIELD_GLOW = [0.3, 0.8, 1, 0.16] as const;
+
+/**
+ * One-shot styles: [r, g, b, kind, start world size, end world size, alpha].
+ * kind 0 = soft pulse, 1 = ring, 2 = sparkle.
+ */
+const HIT_FX = [1, 0.58, 0.3, 1, 16, 74, 0.9] as const;
+const SHIELD_POP_FX = [0.32, 0.92, 1, 1, 14, 64, 0.9] as const;
+const BEST_FX = [1, 0.82, 0.3, 0, 26, 96, 1] as const;
+const PEARL_FX = [1, 0.96, 0.72, 2, 8, 30, 0.85] as const;
+
+type EventFx = readonly [number, number, number, number, number, number, number];
+
+function eventFx(type: string): EventFx | null {
+  switch (type) {
+    case 'hit':
+      return HIT_FX;
+    case 'shield-pop':
+      return SHIELD_POP_FX;
+    case 'best':
+      return BEST_FX;
+    case 'pearl':
+      return PEARL_FX;
+    default:
+      return null;
+  }
+}
+
+/** Interleaved particle vertex: aPos(2), aSeed(2), aParams(4). */
+const PARTICLE_FLOATS = 8;
+const PARTICLE_VERTS = 6;
+const PARTICLE_BACK_RATIO = 0.55;
+const PARTICLE_TRAIL_RATIO = 0.12;
+const PARTICLE_QUAD = [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1] as const;
+
+function pseudoRandom(n: number): number {
+  const value = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return value - Math.floor(value);
+}
 
 /**
  * Half-float colour targets need a color-renderable extension in WebGL2.
@@ -124,17 +194,28 @@ export class WebGLBackend implements PostFXBackend {
   private brightProgram: WebGLProgram | null = null;
   private blurProgram: WebGLProgram | null = null;
   private compositeProgram: WebGLProgram | null = null;
+  private spriteProgram: WebGLProgram | null = null;
+  private particleProgram: WebGLProgram | null = null;
   private quad: Quad | null = null;
   private sceneTexture: WebGLTexture | null = null;
   private sceneFbo: Framebuffer | null = null;
   private bloomFbos: Framebuffer[] = [];
   private bloomTemps: Framebuffer[] = [];
+  private particleVao: WebGLVertexArrayObject | null = null;
+  private particleBuffer: WebGLBuffer | null = null;
+  private particleCount = 0;
+  private particleBackVerts = 0;
 
   private backgroundUniforms: BackgroundUniforms | null = null;
   private sceneUniforms: SceneUniforms | null = null;
   private brightUniforms: BrightUniforms | null = null;
   private blurUniforms: BlurUniforms | null = null;
   private compositeUniforms: CompositeUniforms | null = null;
+  private spriteUniforms: SpriteUniforms | null = null;
+  private particleUniforms: ParticleUniforms | null = null;
+
+  private shakeX = 0;
+  private shakeY = 0;
 
   private stageWidth = 0;
   private stageHeight = 0;
@@ -197,6 +278,16 @@ export class WebGLBackend implements PostFXBackend {
         backgroundVertSource,
         compositeFragSource
       );
+      this.spriteProgram = createProgram(
+        gl,
+        spriteVertSource,
+        effectsFragSource
+      );
+      this.particleProgram = createProgram(
+        gl,
+        particleVertSource,
+        effectsFragSource
+      );
 
       this.quad = createQuad(gl);
       this.sceneTexture = createTexture(gl);
@@ -206,12 +297,14 @@ export class WebGLBackend implements PostFXBackend {
         time: gl.getUniformLocation(this.backgroundProgram, 'uTime'),
         gameRect: gl.getUniformLocation(this.backgroundProgram, 'uGameRect'),
         world: gl.getUniformLocation(this.backgroundProgram, 'uWorld'),
+        shake: gl.getUniformLocation(this.backgroundProgram, 'uShake'),
       };
       this.sceneUniforms = {
         scene: gl.getUniformLocation(this.sceneProgram, 'uScene'),
         gameRect: gl.getUniformLocation(this.sceneProgram, 'uGameRect'),
         resolution: gl.getUniformLocation(this.sceneProgram, 'uResolution'),
         sceneSize: gl.getUniformLocation(this.sceneProgram, 'uSceneSize'),
+        shake: gl.getUniformLocation(this.sceneProgram, 'uShake'),
       };
       this.brightUniforms = {
         scene: gl.getUniformLocation(this.brightProgram, 'uScene'),
@@ -239,6 +332,7 @@ export class WebGLBackend implements PostFXBackend {
           this.compositeProgram,
           'uBloomEnabled'
         ),
+        hit: gl.getUniformLocation(this.compositeProgram, 'uHit'),
         vignette: gl.getUniformLocation(this.compositeProgram, 'uVignette'),
         grain: gl.getUniformLocation(this.compositeProgram, 'uGrain'),
         ca: gl.getUniformLocation(this.compositeProgram, 'uCA'),
@@ -252,6 +346,20 @@ export class WebGLBackend implements PostFXBackend {
           this.compositeProgram,
           'uGradeHighlight'
         ),
+      };
+      this.spriteUniforms = {
+        resolution: gl.getUniformLocation(this.spriteProgram, 'uResolution'),
+        shake: gl.getUniformLocation(this.spriteProgram, 'uShake'),
+        center: gl.getUniformLocation(this.spriteProgram, 'uCenter'),
+        size: gl.getUniformLocation(this.spriteProgram, 'uSize'),
+        color: gl.getUniformLocation(this.spriteProgram, 'uColor'),
+        kind: gl.getUniformLocation(this.spriteProgram, 'uKind'),
+      };
+      this.particleUniforms = {
+        resolution: gl.getUniformLocation(this.particleProgram, 'uResolution'),
+        shake: gl.getUniformLocation(this.particleProgram, 'uShake'),
+        fish: gl.getUniformLocation(this.particleProgram, 'uFish'),
+        time: gl.getUniformLocation(this.particleProgram, 'uTime'),
       };
 
       return true;
@@ -317,6 +425,7 @@ export class WebGLBackend implements PostFXBackend {
       this.allocateTargets(width, height, profile.bloom);
     }
 
+    this.ensureParticlePool(profile.particleCount);
     this.bloomThisFrame = false;
   }
 
@@ -339,7 +448,7 @@ export class WebGLBackend implements PostFXBackend {
   }
 
   /** Full-bleed procedural background, evaluated in world coordinates. */
-  public background(snapshot: SceneSnapshot, _profile: QualityProfile): void {
+  public background(snapshot: SceneSnapshot, profile: QualityProfile): void {
     const gl = this.gl;
     const program = this.backgroundProgram;
     const quad = this.quad;
@@ -352,17 +461,19 @@ export class WebGLBackend implements PostFXBackend {
     gl.disable(gl.BLEND);
     gl.useProgram(program);
 
+    this.computeShake(snapshot, profile);
     const rect = this.deviceGameRect();
     gl.uniform2f(uniforms.resolution, this.postWidth, this.postHeight);
     gl.uniform1f(uniforms.time, snapshot.time);
     gl.uniform4f(uniforms.gameRect, rect.x, rect.y, rect.width, rect.height);
     gl.uniform2f(uniforms.world, snapshot.world.width, snapshot.world.height);
+    gl.uniform2f(uniforms.shake, this.shakeX, this.shakeY);
 
     this.drawQuad(gl, quad);
   }
 
   /** Uploads and draws the Canvas 2D capture into the game rect. */
-  public scene(_snapshot: SceneSnapshot, _profile: QualityProfile): void {
+  public scene(snapshot: SceneSnapshot, profile: QualityProfile): void {
     const gl = this.gl;
     const program = this.sceneProgram;
     const quad = this.quad;
@@ -382,9 +493,11 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform1i(uniforms.scene, 0);
     gl.uniform2f(uniforms.sceneSize, sceneCanvas.width, sceneCanvas.height);
 
+    this.computeShake(snapshot, profile);
     const rect = this.deviceGameRect();
     gl.uniform4f(uniforms.gameRect, rect.x, rect.y, rect.width, rect.height);
     gl.uniform2f(uniforms.resolution, this.postWidth, this.postHeight);
+    gl.uniform2f(uniforms.shake, this.shakeX, this.shakeY);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -392,9 +505,178 @@ export class WebGLBackend implements PostFXBackend {
     this.drawQuad(gl, quad);
   }
 
-  /** Task 9 owns the glow/particle/shield passes. */
-  public effects(_snapshot: SceneSnapshot, _profile: QualityProfile): void {
-    // Intentionally empty until Task 9.
+  /**
+   * Additive effects into the scene target before bloom: a preallocated
+   * GPU particle pool (back silt, then front silt/trail), pearl and jellyfish
+   * glows, the shield rim/ring at the fish, and one-shot event rings younger
+   * than EVENT_SECONDS. Particle motion lives entirely in the vertex shader,
+   * so a frame uploads nothing and allocates nothing.
+   */
+  public effects(snapshot: SceneSnapshot, profile: QualityProfile): void {
+    const gl = this.gl;
+    const fbo = this.sceneFbo;
+    const quad = this.quad;
+    const sprite = this.spriteProgram;
+    const spriteUniforms = this.spriteUniforms;
+    const particleUniforms = this.particleUniforms;
+
+    if (
+      !gl ||
+      !profile.effects ||
+      !fbo ||
+      !quad ||
+      !sprite ||
+      !spriteUniforms ||
+      !particleUniforms ||
+      !this.particleProgram
+    ) {
+      return;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.framebuffer);
+    gl.viewport(0, 0, this.postWidth, this.postHeight);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+
+    this.computeShake(snapshot, profile);
+    const rect = this.deviceGameRect();
+    const world = snapshot.world;
+    const scaleX = world.width > 0 ? rect.width / world.width : 1;
+    const scaleY = world.height > 0 ? rect.height / world.height : 1;
+    const fishX = rect.x + snapshot.fish.x * scaleX;
+    const fishY = rect.y + snapshot.fish.y * scaleY;
+
+    if (this.particleVao && this.particleCount > 0) {
+      this.drawParticles(
+        gl,
+        snapshot,
+        particleUniforms,
+        0,
+        this.particleBackVerts,
+        fishX,
+        fishY
+      );
+    }
+
+    gl.useProgram(sprite);
+    gl.uniform2f(spriteUniforms.resolution, this.postWidth, this.postHeight);
+    gl.uniform2f(spriteUniforms.shake, this.shakeX, this.shakeY);
+
+    for (const obs of snapshot.obstacles) {
+      if (obs.pearl && !obs.pearl.collected && !obs.pearl.missed) {
+        const pearlX = rect.x + obs.pearl.x * scaleX;
+        const pearlY = rect.y + obs.pearl.visualY * scaleY;
+        const glow =
+          obs.pearl.radius * 6 * scaleX *
+          (1 + 0.08 * Math.sin(snapshot.time * 3.5 + obs.x * 0.02));
+
+        this.drawSprite(
+          gl,
+          quad,
+          pearlX,
+          pearlY,
+          glow,
+          PEARL_GLOW[0],
+          PEARL_GLOW[1],
+          PEARL_GLOW[2],
+          PEARL_GLOW[3],
+          0
+        );
+      }
+
+      const jellyX = rect.x + (obs.x + obs.width * 0.5) * scaleX;
+      const jellyY = rect.y + obs.bottomY * scaleY;
+      const jellyGlow =
+        obs.width * 2.4 * scaleX *
+        (1 + 0.10 * Math.sin(snapshot.time * 3 + obs.x * 0.05));
+
+      this.drawSprite(
+        gl,
+        quad,
+        jellyX,
+        jellyY,
+        jellyGlow,
+        JELLY_GLOW[0],
+        JELLY_GLOW[1],
+        JELLY_GLOW[2],
+        JELLY_GLOW[3],
+        0
+      );
+    }
+
+    if (snapshot.shield.active) {
+      const radius =
+        (snapshot.fish.radius + 18) * scaleX *
+        (1 + 0.05 * Math.sin(snapshot.time * 6 + snapshot.shield.activeTime));
+
+      this.drawSprite(
+        gl,
+        quad,
+        fishX,
+        fishY,
+        radius * 2,
+        SHIELD_GLOW[0],
+        SHIELD_GLOW[1],
+        SHIELD_GLOW[2],
+        SHIELD_GLOW[3],
+        0
+      );
+      this.drawSprite(
+        gl,
+        quad,
+        fishX,
+        fishY,
+        radius * 2,
+        SHIELD_RING[0],
+        SHIELD_RING[1],
+        SHIELD_RING[2],
+        SHIELD_RING[3],
+        1
+      );
+    }
+
+    for (const event of snapshot.events) {
+      const age = snapshot.time - event.t;
+      if (!(age >= 0) || age >= EVENT_SECONDS) {
+        continue;
+      }
+
+      const fx = eventFx(event.type);
+      if (!fx) {
+        continue;
+      }
+
+      const progress = age / EVENT_SECONDS;
+      const size = (fx[4] + (fx[5] - fx[4]) * progress) * scaleX;
+
+      this.drawSprite(
+        gl,
+        quad,
+        rect.x + event.x * scaleX,
+        rect.y + event.y * scaleY,
+        size,
+        fx[0],
+        fx[1],
+        fx[2],
+        fx[6] * (1 - progress),
+        fx[3]
+      );
+    }
+
+    if (this.particleVao && this.particleCount > 0) {
+      this.drawParticles(
+        gl,
+        snapshot,
+        particleUniforms,
+        this.particleBackVerts,
+        this.particleCount * PARTICLE_VERTS - this.particleBackVerts,
+        fishX,
+        fishY
+      );
+    }
+
+    gl.disable(gl.BLEND);
   }
 
   /**
@@ -514,6 +796,7 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform1f(uniforms.bloomScale, this.halfFloatTargets ? 1 : 4);
     gl.uniform1f(uniforms.bloomStrength, BLOOM_STRENGTH);
     gl.uniform1f(uniforms.bloomEnabled, hasBloom ? 1 : 0);
+    gl.uniform1f(uniforms.hit, this.hitSwell(snapshot));
     gl.uniform1f(uniforms.vignette, VIGNETTE);
     gl.uniform1f(uniforms.grain, profile.grain ? GRAIN : 0);
     gl.uniform1f(
@@ -557,6 +840,7 @@ export class WebGLBackend implements PostFXBackend {
     if (gl) {
       try {
         this.releaseTargets();
+        this.releaseParticlePool();
         if (this.sceneTexture) {
           gl.deleteTexture(this.sceneTexture);
         }
@@ -579,6 +863,12 @@ export class WebGLBackend implements PostFXBackend {
         if (this.compositeProgram) {
           gl.deleteProgram(this.compositeProgram);
         }
+        if (this.spriteProgram) {
+          gl.deleteProgram(this.spriteProgram);
+        }
+        if (this.particleProgram) {
+          gl.deleteProgram(this.particleProgram);
+        }
       } catch {
         // Best effort: a lost context can reject deletes. The caller is
         // already on the Canvas 2D path.
@@ -593,6 +883,8 @@ export class WebGLBackend implements PostFXBackend {
     this.brightProgram = null;
     this.blurProgram = null;
     this.compositeProgram = null;
+    this.spriteProgram = null;
+    this.particleProgram = null;
     this.quad = null;
     this.sceneTexture = null;
     this.sceneFbo = null;
@@ -603,6 +895,14 @@ export class WebGLBackend implements PostFXBackend {
     this.brightUniforms = null;
     this.blurUniforms = null;
     this.compositeUniforms = null;
+    this.spriteUniforms = null;
+    this.particleUniforms = null;
+    this.particleVao = null;
+    this.particleBuffer = null;
+    this.particleCount = 0;
+    this.particleBackVerts = 0;
+    this.shakeX = 0;
+    this.shakeY = 0;
     this.stageWidth = 0;
     this.stageHeight = 0;
     this.postWidth = 0;
@@ -677,6 +977,218 @@ export class WebGLBackend implements PostFXBackend {
     this.sceneFbo = null;
     this.bloomFbos = [];
     this.bloomTemps = [];
+  }
+
+  /**
+   * Rebuilds the particle pool only when the profile's count changes. The
+   * descriptor buffer is static; drift and trail motion are vertex-shader
+   * functions of uTime/uFish, so per-frame draws upload and allocate nothing.
+   */
+  private ensureParticlePool(count: number): void {
+    const target = Math.max(0, Math.floor(count));
+    if (
+      target === this.particleCount &&
+      this.particleVao &&
+      this.particleBuffer
+    ) {
+      return;
+    }
+
+    this.releaseParticlePool();
+
+    const gl = this.gl;
+    if (!gl || target === 0) {
+      return;
+    }
+
+    const vao = gl.createVertexArray();
+    const buffer = gl.createBuffer();
+    if (!vao || !buffer) {
+      if (vao) gl.deleteVertexArray(vao);
+      if (buffer) gl.deleteBuffer(buffer);
+      return;
+    }
+
+    const backCount = Math.max(1, Math.round(target * PARTICLE_BACK_RATIO));
+    const trailCount = Math.max(2, Math.round(target * PARTICLE_TRAIL_RATIO));
+    const data = new Float32Array(target * PARTICLE_VERTS * PARTICLE_FLOATS);
+    let offset = 0;
+
+    for (let i = 0; i < target; i++) {
+      const back = i < backCount;
+      const trail = !back && i >= target - trailCount;
+      const seedX = pseudoRandom(i + 1);
+      const seedY = pseudoRandom(i + 17.3);
+      const size = trail
+        ? 2.2
+        : back
+          ? 1.5 + pseudoRandom(i + 5.1) * 2.5
+          : 4 + pseudoRandom(i + 7.7) * 5;
+
+      for (let v = 0; v < PARTICLE_VERTS; v++) {
+        data[offset++] = PARTICLE_QUAD[v * 2];
+        data[offset++] = PARTICLE_QUAD[v * 2 + 1];
+        data[offset++] = seedX;
+        data[offset++] = seedY;
+        data[offset++] = size;
+        data[offset++] = back ? 0 : 1;
+        data[offset++] = 0.6 + pseudoRandom(i + 11.9) * 0.8;
+        data[offset++] = trail ? 1 : 0;
+      }
+    }
+
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, PARTICLE_FLOATS * 4, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, PARTICLE_FLOATS * 4, 8);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, PARTICLE_FLOATS * 4, 16);
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+    this.particleVao = vao;
+    this.particleBuffer = buffer;
+    this.particleCount = target;
+    this.particleBackVerts = backCount * PARTICLE_VERTS;
+  }
+
+  private releaseParticlePool(): void {
+    const gl = this.gl;
+
+    if (gl) {
+      try {
+        if (this.particleVao) gl.deleteVertexArray(this.particleVao);
+        if (this.particleBuffer) gl.deleteBuffer(this.particleBuffer);
+      } catch {
+        // A lost context can reject deletes; drop the references anyway.
+      }
+    }
+
+    this.particleVao = null;
+    this.particleBuffer = null;
+    this.particleCount = 0;
+    this.particleBackVerts = 0;
+  }
+
+  /** Camera shake is a translation of the world only, never a lens warp. */
+  private computeShake(
+    snapshot: SceneSnapshot,
+    profile: QualityProfile
+  ): void {
+    this.shakeX = 0;
+    this.shakeY = 0;
+
+    if (!profile.shake) {
+      return;
+    }
+
+    let latest: number | null = null;
+    let hitX = 0;
+    let hitY = 0;
+
+    for (const event of snapshot.events) {
+      if (event.type !== 'hit') {
+        continue;
+      }
+      const age = snapshot.time - event.t;
+      if (age < 0 || age >= SHAKE_SECONDS) {
+        continue;
+      }
+      if (latest === null || event.t > latest) {
+        latest = event.t;
+        hitX = event.x;
+        hitY = event.y;
+      }
+    }
+
+    if (latest === null) {
+      return;
+    }
+
+    const tierScale =
+      profile.tier === 'high' ? 1 : profile.tier === 'medium' ? 0.5 : 0;
+    if (tierScale <= 0) {
+      return;
+    }
+
+    const age = snapshot.time - latest;
+    const amplitude = SHAKE_PX * (1 - age / SHAKE_SECONDS) * tierScale;
+    const phase = hitX * 0.13 + hitY * 0.29 + age * 120;
+    this.shakeX = Math.cos(phase) * amplitude;
+    this.shakeY = Math.sin(phase) * amplitude;
+  }
+
+  /** Zero-to-one bloom swell for a recent hit; never a luminance flash. */
+  private hitSwell(snapshot: SceneSnapshot): number {
+    let swell = 0;
+
+    for (const event of snapshot.events) {
+      if (event.type !== 'hit') {
+        continue;
+      }
+      const age = snapshot.time - event.t;
+      if (age < 0 || age >= EVENT_SECONDS) {
+        continue;
+      }
+      const weight = 1 - age / EVENT_SECONDS;
+      if (weight > swell) {
+        swell = weight;
+      }
+    }
+
+    return swell;
+  }
+
+  private drawSprite(
+    gl: WebGL2RenderingContext,
+    quad: Quad,
+    centerX: number,
+    centerY: number,
+    size: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+    kind: number
+  ): void {
+    const uniforms = this.spriteUniforms;
+    if (!uniforms) {
+      return;
+    }
+
+    gl.uniform2f(uniforms.center, centerX, centerY);
+    gl.uniform2f(uniforms.size, size, size);
+    gl.uniform4f(uniforms.color, r, g, b, a);
+    gl.uniform1f(uniforms.kind, kind);
+    this.drawQuad(gl, quad);
+  }
+
+  private drawParticles(
+    gl: WebGL2RenderingContext,
+    snapshot: SceneSnapshot,
+    uniforms: ParticleUniforms,
+    first: number,
+    count: number,
+    fishX: number,
+    fishY: number
+  ): void {
+    const program = this.particleProgram;
+    const vao = this.particleVao;
+    if (!program || !vao || count <= 0) {
+      return;
+    }
+
+    gl.useProgram(program);
+    gl.uniform2f(uniforms.resolution, this.postWidth, this.postHeight);
+    gl.uniform2f(uniforms.shake, this.shakeX, this.shakeY);
+    gl.uniform2f(uniforms.fish, fishX, fishY);
+    gl.uniform1f(uniforms.time, snapshot.time);
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, first, count);
+    gl.bindVertexArray(null);
   }
 
   private bindTarget(gl: WebGL2RenderingContext, target: Framebuffer): void {

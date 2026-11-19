@@ -6,6 +6,7 @@ uniform vec2 uResolution;
 uniform float uTime;
 uniform vec4 uGameRect;
 uniform vec2 uWorld;
+uniform vec2 uShake;
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -55,7 +56,8 @@ float causticBands(vec2 p, float t) {
   return pow(clamp(0.5 + 0.25 * bands, 0.0, 1.0), 3.0);
 }
 void main() {
-  vec2 stagePx = vec2(vUv.x * uResolution.x, (1.0 - vUv.y) * uResolution.y);
+  vec2 stagePx =
+    vec2(vUv.x * uResolution.x, (1.0 - vUv.y) * uResolution.y) - uShake;
   vec2 world = vec2(
     (stagePx.x - uGameRect.x) / max(uGameRect.z, 1.0) * uWorld.x,
     (stagePx.y - uGameRect.y) / max(uGameRect.w, 1.0) * uWorld.y
