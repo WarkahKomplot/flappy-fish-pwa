@@ -95,8 +95,9 @@ This shape makes an additive compositor possible without rewriting gameplay.
   Budgets are set from a measured baseline (§8), not asserted.
 - **Mobile GPU:** WebGL2; no float render targets guaranteed on iOS; no
   compute shaders; fill-rate is the scarce resource, not vertex count.
-- **Bundle:** +≤30 KB raw (~10 KB gzip); stay under the original 100 KB gzip
-  budget.
+- **Bundle:** cumulative delta ≤45 KB raw (~15 KB gzip); the hard cap is the
+  original 100 KB gzip total for the app shell. The earlier 30/10 delta was a
+  planning guardrail; the effects/control stages need the extra room.
 - **Resolution:** DPR cap 2; total post-buffer pixels capped; capture buffer
   capped separately.
 - **Tests:** 345 existing tests must pass unchanged where they cover gameplay;
@@ -470,7 +471,7 @@ devices; the post budget is derived from the measured headroom.
 | Bloom/rays | ≤2 ms |
 | GPU total | ≤6 ms |
 | Frame | **p95 ≤16.7 ms** (60 fps) on High/Medium/Low targets |
-| Bundle delta | ≤30 KB raw / ≤10 KB gzip |
+| Bundle delta | ≤45 KB raw / ≤15 KB gzip (hard total ≤100 KB gzip) |
 | Memory | ≤32 MB GPU for FBOs/textures |
 | Shader warm-up | ≤150 ms at boot |
 | Network | 0 requests after load |
@@ -563,7 +564,7 @@ end of Phase 1.
 | Context loss | frozen screen | auto-fallback to 2D; no run reset |
 | Installed PWA has no URL bar | recovery blocked | §7.10 in-game FX control; Off restores 2D; failed switch reverts to Off |
 | Two renderers drift | bugs | shared snapshot/resolvePearlY; 2D renderer remains source of truth |
-| Bundle creep | slower load | no deps; +≤30 KB; gzip check in CI |
+| Bundle creep | slower load | no deps; +≤45 KB; hard 100 KB gzip; check in CI |
 
 ---
 
@@ -580,7 +581,7 @@ end of Phase 1.
 - No WebGL2 → exact current Canvas 2D look, no errors, full playability;
   renderer errors fall back without killing the loop.
 - No new network requests; works offline; SW update delivers the new build.
-- 345 existing tests + new tests pass; `tsc` clean; bundle ≤ +30 KB raw.
+- 345 existing tests + new tests pass; `tsc` clean; cumulative bundle ≤ +45 KB raw / +15 KB gzip, total ≤100 KB gzip.
 - `prefers-reduced-motion` disables shake/CA/grain; no added flashing.
 - **Emergency recovery:** an installed PWA can set Auto/High/Medium/Low/Off
   from the start screen or pause overlay without a new release; a failed

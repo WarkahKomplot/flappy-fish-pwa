@@ -16,7 +16,7 @@
 - Quality profiles: High `captureDpr 1.5`, `postDpr 2`, `maxPostPixels 2_200_000`; Medium `1.0 / 1.5`; Low `0.75 / 1.0`; Off = Canvas 2D.
 - Capture buffer cap: `MAX_CAPTURE_PIXELS = 1_500_000`.
 - Renderer budget: **p95 ≤16.7 ms** on High/Medium/Low targets. No tier accepts 30 fps.
-- Bundle delta **≤30 KB raw / ≤10 KB gzip**; **no new runtime dependencies**; shaders inline or `?raw`.
+- Bundle: cumulative delta **≤45 KB raw / ≤15 KB gzip**, hard total **≤100 KB gzip**; **no new runtime dependencies**; shaders inline or `?raw`, comments stripped. (The earlier 30/10 delta was a planning guardrail; effects/control need the extra room.)
 - Colour: scene texture `SRGB8_ALPHA8`; linear composite; explicit linear→sRGB at present; premultiplied alpha end-to-end.
 - Fallback: no WebGL2 / failed init / renderer throw → exact current Canvas 2D look, game keeps running and keeps its run state.
 - FX control: **Auto / High / Medium / Low / Off**, persisted, on the start screen and pause overlay, accessible, reverts to Off if a switch fails.
@@ -968,7 +968,7 @@ Expected: FAIL — modules missing.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/rendering/qa.test.ts && npm test && npx tsc --noEmit && npm run build`
-Expected: all pass; bundle delta ≤30 KB raw.
+Expected: all pass; cumulative bundle delta ≤45 KB raw / ≤15 KB gzip, total ≤100 KB gzip.
 
 - [ ] **Step 5: Commit**
 
