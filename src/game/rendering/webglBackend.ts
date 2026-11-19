@@ -305,7 +305,7 @@ export class WebGLBackend implements PostFXBackend {
     this.releaseTargets();
 
     try {
-      this.allocateTargets(width, height);
+      this.allocateTargets(width, height, profile.bloom);
     } catch (error) {
       // The extension can be advertised but still reject a complete RGBA16F
       // target; degrade to the RGBA8 + dither path rather than failing FX.
@@ -314,7 +314,7 @@ export class WebGLBackend implements PostFXBackend {
         throw error;
       }
       this.halfFloatTargets = false;
-      this.allocateTargets(width, height);
+      this.allocateTargets(width, height, profile.bloom);
     }
 
     this.bloomThisFrame = false;
@@ -407,7 +407,7 @@ export class WebGLBackend implements PostFXBackend {
     const sceneFbo = this.sceneFbo;
     const quad = this.quad;
     const bright = this.brightUniforms;
-    const blur = this.blurUniforms;
+    const blurUniforms = this.blurUniforms;
     const brightProgram = this.brightProgram;
     const blurProgram = this.blurProgram;
 
@@ -416,7 +416,7 @@ export class WebGLBackend implements PostFXBackend {
       !sceneFbo ||
       !quad ||
       !bright ||
-      !blur ||
+      !blurUniforms ||
       !brightProgram ||
       !blurProgram ||
       this.bloomFbos.length !== BLOOM_MIPS ||
@@ -456,9 +456,9 @@ export class WebGLBackend implements PostFXBackend {
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(blurProgram);
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(blur.image, 0);
-    gl.uniform2f(blur.direction, 0, 0);
-    gl.uniform1f(blur.weight, BLOOM_UPSAMPLE_WEIGHT);
+    gl.uniform1i(blurUniforms.image, 0);
+    gl.uniform2f(blurUniforms.direction, 0, 0);
+    gl.uniform1f(blurUniforms.weight, BLOOM_UPSAMPLE_WEIGHT);
 
     for (let i = BLOOM_MIPS - 1; i >= 1; i--) {
       const target = this.bloomFbos[i - 1];
@@ -466,7 +466,7 @@ export class WebGLBackend implements PostFXBackend {
 
       this.bindTarget(gl, target);
       gl.bindTexture(gl.TEXTURE_2D, source.texture);
-      gl.uniform2f(blur.texelSize, 1 / source.width, 1 / source.height);
+      gl.uniform2f(blurUniforms.texelSize, 1 / source.width, 1 / source.height);
       this.drawQuad(gl, quad);
     }
 
@@ -490,9 +490,10 @@ export class WebGLBackend implements PostFXBackend {
       return;
     }
 
-    // When bloom is off this is the scene texture, but uBloomEnabled is 0 so
-    // the sample is ignored; it only has to be a valid bound texture.
-    const bloomTexture = this.bloomFbos[0]?.texture ?? fbo.texture;
+    // Bloom targets only exist on bloom tiers. Without them, bind the scene
+    // texture as a safe dummy and let uBloomEnabled skip the sample.
+    const hasBloom = this.bloomThisFrame && this.bloomFbos.length > 0;
+    const bloomTexture = hasBloom ? this.bloomFbos[0].texture : fbo.texture;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.postWidth, this.postHeight);
@@ -512,7 +513,7 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform1f(uniforms.exposure, EXPOSURE);
     gl.uniform1f(uniforms.bloomScale, this.halfFloatTargets ? 1 : 4);
     gl.uniform1f(uniforms.bloomStrength, BLOOM_STRENGTH);
-    gl.uniform1f(uniforms.bloomEnabled, this.bloomThisFrame ? 1 : 0);
+    gl.uniform1f(uniforms.bloomEnabled, hasBloom ? 1 : 0);
     gl.uniform1f(uniforms.vignette, VIGNETTE);
     gl.uniform1f(uniforms.grain, profile.grain ? GRAIN : 0);
     gl.uniform1f(
@@ -612,11 +613,16 @@ export class WebGLBackend implements PostFXBackend {
   }
 
   /**
-   * Allocates the scene target and the bloom ping-pong chain in the currently
-   * selected format. Throws if any target is incomplete so `resize` can
-   * degrade to RGBA8.
+   * Allocates the scene target and, when the profile enables bloom, the
+   * bloom ping-pong chain in the currently selected format. Throws if any
+   * target is incomplete so `resize` can degrade to RGBA8. The tier can
+   * switch at runtime, so `resize` reallocates when `withBloom` changes.
    */
-  private allocateTargets(width: number, height: number): void {
+  private allocateTargets(
+    width: number,
+    height: number,
+    withBloom: boolean
+  ): void {
     const gl = this.gl;
     if (!gl) {
       throw new Error('WebGL context is not initialised');
@@ -626,6 +632,10 @@ export class WebGLBackend implements PostFXBackend {
     const type = this.halfFloatTargets ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
 
     this.sceneFbo = createFbo(gl, width, height, internalFormat, type);
+
+    if (!withBloom) {
+      return;
+    }
 
     for (let i = 0; i < BLOOM_MIPS; i++) {
       const divisor = 1 << (i + 1);

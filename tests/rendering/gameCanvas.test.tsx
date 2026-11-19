@@ -100,6 +100,7 @@ describe('GameCanvas two-canvas structure and fallback', () => {
   afterEach(() => {
     engine.destroy();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('shows the 2D scene and hides FX when WebGL2 is unavailable', () => {
@@ -299,6 +300,85 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(backend.composite).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('game-canvas').style.opacity).toBe('0');
     expect(startLoop).toHaveBeenCalled();
+  });
+
+  it('populates the 2D scene before the first GL pass on mount and after a resize', () => {
+    let triggerResize: (() => void) | null = null;
+    class FakeResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        triggerResize = () => callback([], this as unknown as ResizeObserver);
+      }
+      observe(): void {}
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const events: string[] = [];
+    const captureVisibility: boolean[] = [];
+
+    const beginFrame = backend.beginFrame.bind(backend);
+    backend.beginFrame = vi.fn(
+      (...args: Parameters<PostFXBackend['beginFrame']>) => {
+        events.push('beginFrame');
+        beginFrame(...args);
+      }
+    );
+    const composite = backend.composite.bind(backend);
+    backend.composite = vi.fn(
+      (...args: Parameters<PostFXBackend['composite']>) => {
+        events.push('composite');
+        composite(...args);
+      }
+    );
+
+    const originalRender = engine.render.bind(engine);
+    vi.spyOn(engine, 'render').mockImplementation((ctx, width, height, dpr) => {
+      events.push('render');
+      captureVisibility.push(engine.backgroundVisible);
+      originalRender(ctx, width, height, dpr);
+    });
+
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
+    );
+
+    expect(events.slice(0, 3)).toEqual(['render', 'beginFrame', 'composite']);
+    expect(captureVisibility[0]).toBe(false);
+    expect(engine.backgroundVisible).toBe(false);
+    expect(triggerResize).not.toBeNull();
+
+    events.length = 0;
+    act(() => {
+      triggerResize?.();
+    });
+
+    expect(events.slice(0, 3)).toEqual(['render', 'beginFrame', 'composite']);
+    expect(captureVisibility[captureVisibility.length - 1]).toBe(false);
+    expect(backend.beginFrame).toHaveBeenCalledTimes(2);
+    expect(engine.backgroundVisible).toBe(false);
+  });
+
+  it('restores the 2D background if the first-frame scene capture throws', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    vi.spyOn(engine, 'render').mockImplementationOnce(() => {
+      throw new Error('2d capture boom');
+    });
+
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
+    );
+
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(engine.backgroundVisible).toBe(true);
+    expect(engine.afterRender).toBeUndefined();
+    expect(backend.beginFrame).not.toHaveBeenCalled();
+    expect(backend.dispose).toHaveBeenCalled();
   });
 
   it('does not start the idle loop in the 2D fallback', () => {
