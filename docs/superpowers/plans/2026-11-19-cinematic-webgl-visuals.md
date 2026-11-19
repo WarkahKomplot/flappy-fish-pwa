@@ -16,7 +16,7 @@
 - Quality profiles: High `captureDpr 1.5`, `postDpr 2`, `maxPostPixels 2_200_000`; Medium `1.0 / 1.5`; Low `0.75 / 1.0`; Off = Canvas 2D.
 - Capture buffer cap: `MAX_CAPTURE_PIXELS = 1_500_000`.
 - Renderer budget: **p95 ≤16.7 ms** on High/Medium/Low targets. No tier accepts 30 fps.
-- Bundle: cumulative delta **≤45 KB raw / ≤15 KB gzip**, hard total **≤100 KB gzip**; **no new runtime dependencies**; shaders inline or `?raw`, comments stripped. (The earlier 30/10 delta was a planning guardrail; effects/control need the extra room.)
+- Bundle: hard total **≤100 KB gzip** (the original budget), interim **≤90 KB after Task 11**, and **≤16 KB raw / ≤6 KB gzip combined for Tasks 11+12**. The 45/15 delta guardrail was spent at Task 10 (+44.25 KB raw / +12.97 KB gzip; total 81.1 KB). No new runtime dependencies; shaders inline or `?raw`, comments stripped.
 - Colour: scene texture `SRGB8_ALPHA8`; linear composite; explicit linear→sRGB at present; premultiplied alpha end-to-end.
 - Fallback: no WebGL2 / failed init / renderer throw → exact current Canvas 2D look, game keeps running and keeps its run state.
 - FX control: **Auto / High / Medium / Low / Off**, persisted, on the start screen and pause overlay, accessible, reverts to Off if a switch fails.
@@ -790,7 +790,7 @@ git commit -m "feat(render): add glows, GPU particles and impact effects"
 **Files:**
 - Create: `src/components/FxPanel.tsx`
 - Modify: `src/components/StartScreen.tsx`, `src/components/HUD.tsx`, `src/App.tsx`, `src/components/GameCanvas.tsx`
-- Test: `tests/rendering/fxPanel.test.tsx`, update `tests/ui.test.tsx`, and add 3 new preference-switch/re-init tests to `tests/rendering/gameCanvas.test.tsx` (the Off-with-backend case pre-existed)
+- Test: `tests/rendering/fxPanel.test.tsx`, update `tests/ui.test.tsx`, and add the applicable preference-switch/re-init tests to `tests/rendering/gameCanvas.test.tsx` (the final Task 10 commit has 5 new; the Off-with-backend case pre-existed)
 
 **Interfaces:**
 - `FxPanel` props:
@@ -799,6 +799,7 @@ export interface FxPanelProps {
   isOpen: boolean;
   preference: FxPreference;
   effectiveTier: QualityTier;
+  failureMessage?: string;
   onSelect: (pref: FxPreference) => void;
   onClose: () => void;
 }
@@ -896,6 +897,8 @@ it('skips the Canvas 2D ribbon text when the DOM label owns it', () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
+Also add an App test: a stored GL preference that resolves Off on load persists Off and shows the failure message (the Task 10 behavior; pin it while touching App).
+
 Run: `npx vitest run tests/rendering/ribbonLabel.test.tsx tests/engine.test.ts`
 Expected: FAIL — component/flag missing.
 
@@ -963,7 +966,7 @@ Expected: FAIL — modules missing.
 
 - [ ] **Step 3: Implement**
 
-`parseQaFlags` is pure. `applyVisualFixture` pauses the engine (`status='paused'`), sets `gameTime`, `fish` to `(80, 300)`, creates three fixed obstacles at `x=180, 380, 580` with fixed `topHeight`, sets pearls at fixed gap centres, and sets `ribbonX`/`ribbonTargetScore`; it must not advance physics. Wire `?freeze` to call it after boot and skip `start()`; `?debug` renders `DebugOverlay`; `?benchmark` logs p50/p95 on each run end. Add the adaptive loop in GameCanvas (FrameStats, `nextTier`, one downgrade per run, re-evaluate on status idle/gameover). Bump the SW cache and registration query, update README with the FX control and `?fx` QA note, and record the device matrix results in the design doc.
+`parseQaFlags` is pure. `applyVisualFixture` pauses the engine (`status='paused'`), sets `gameTime`, `fish` to `(80, 300)`, creates three fixed obstacles at `x=180, 380, 580` with fixed `topHeight`, sets pearls at fixed gap centres, and sets `ribbonX`/`ribbonTargetScore`; it must not advance physics. Wire `?freeze` to call it after boot and skip `start()`; `?debug` renders `DebugOverlay`; `?benchmark` logs p50/p95 on each run end. Add the adaptive loop in GameCanvas (FrameStats, `nextTier`, one downgrade per run, re-evaluate on status idle/gameover). Bump the SW cache and registration query, update README with the FX control and `?fx` QA note, and record the device matrix results in the design doc. Also record the final bundle baseline vs `3aae4eb` against the hard ≤100 KB gzip total (interim ≤90 KB after Task 11; Tasks 11+12 ≤16 KB raw / 6 KB gzip).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
