@@ -81,6 +81,10 @@ export function App() {
   const pendingFxSelectionRef = useRef<ExplicitGlTier | null>(
     isExplicitGlTier(fxPreference) ? fxPreference : null
   );
+  const fxPreferenceRef = useRef<FxPreference>(fxPreference);
+  useEffect(() => {
+    fxPreferenceRef.current = fxPreference;
+  }, [fxPreference]);
 
   // Singleton GameEngine reference
   const engineRef = useRef<GameEngine | null>(null);
@@ -175,20 +179,23 @@ export function App() {
   const handleEffectiveTierChange = useCallback((tier: QualityTier) => {
     setEffectiveTier(tier);
 
-    const pending = pendingFxSelectionRef.current;
-    if (!pending) {
+    if (tier !== 'off') {
+      pendingFxSelectionRef.current = null;
       return;
     }
 
+    const pending = pendingFxSelectionRef.current;
     pendingFxSelectionRef.current = null;
-
-    if (tier === 'off') {
-      // The selected GL tier never completed a resize/first frame. Persist
-      // Off so a reload cannot keep retrying a choice that cannot run here.
-      saveFxPreference('off');
-      setFxPreference('off');
-      setFxFailureMessage('Effects unavailable — switched to Off');
+    // A final Off means either a selected GL tier failed to start or a live
+    // GL path stopped mid-run. Both revert/persist Off and explain; a
+    // failed selection is not left "High · Off" with no recovery.
+    if (!pending && !isExplicitGlTier(fxPreferenceRef.current)) {
+      return;
     }
+
+    saveFxPreference('off');
+    setFxPreference('off');
+    setFxFailureMessage('Effects unavailable — switched to Off');
   }, []);
 
   const handleOpenFx = useCallback(() => setIsFxOpen(true), []);

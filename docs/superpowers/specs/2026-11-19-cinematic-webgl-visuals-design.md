@@ -454,10 +454,10 @@ The panel offers **Auto / High / Medium / Low / Off**, shows the resolved tier
   long-press.
 - Precedence: a `?fx=` URL param applies to the session; otherwise the stored
   choice; otherwise Auto. The panel always shows the effective tier.
-- **Mid-run fallback (known residual):** if an explicit GL preference is active
-  and a later GL frame throws, the app falls back to 2D and reports Off; the
-  panel keeps the preference selected and shows the effective Off. A retry
-  nonce is future work; selecting another tier or Off is the recovery path.
+- **Mid-run fallback:** if an explicit GL preference is active and a later GL
+  frame throws, the app falls back to 2D, persists/reports Off and shows the
+  failure message; picking a GL tier again retries a fresh init. The
+  preference is never left selected with no explanation.
 
 ---
 
@@ -653,7 +653,7 @@ Recorded at the end of the Task 12 implementation (branch `flappy-fish-pwa`).
 | Gate | Result |
 |---|---|
 | `npx tsc --noEmit` | **PASS** (clean) |
-| `npm test` | **PASS** — 477 tests in 58 files |
+| `npm test` | **PASS** — 479 tests in 58 files |
 | Focused `tests/rendering/qa.test.ts` | **PASS** — 11 tests |
 | `tests/rendering/gameCanvas.test.tsx` | **PASS** — 27 tests (includes adaptive, benchmark and freeze cases) |
 | `npm run build -- --outDir /tmp/flappy-task12-build --emptyOutDir` | **PASS** |
@@ -684,13 +684,13 @@ figures are rebuilds of their committed trees for a like-for-like comparison.
 | `3aae4eb` baseline | 235.28 kB | 68.42 kB |
 | Task 10 (`47e0957`) | 279.47 kB | 81.09 kB |
 | Task 11 (`f67d6cd`) | 282.24 kB | 82.17 kB |
-| **Final (nit fixes)** | **287.53 kB** | **84.08 kB** |
+| **Final (mid-run fix)** | **287.64 kB** | **84.11 kB** |
 
-- Hard gate: **84.08 kB gzip ≤ 100 kB** — pass.
+- Hard gate: **84.11 kB gzip ≤ 100 kB** — pass.
 - Interim gate: 82.17 kB gzip after Task 11 ≤ 90 kB — pass.
-- Tasks 11+12 combined: **+8.06 kB raw / +2.99 kB gzip** (from Task 10), within
+- Tasks 11+12 combined: **+8.17 kB raw / +3.02 kB gzip** (from Task 10), within
   the ≤16 kB raw / ≤6 kB gzip allowance.
-- Task 12 alone: +5.29 kB raw / +1.91 kB gzip.
-- Cumulative vs `3aae4eb`: **+52.25 kB raw / +15.66 kB gzip**. This is above the
+- Task 12 alone: +5.40 kB raw / +1.94 kB gzip.
+- Cumulative vs `3aae4eb`: **+52.36 kB raw / +15.69 kB gzip**. This is above the
   retired +45/+15 delta guardrail but below the owner-rebaselined 100 kB hard
   total; the delta guardrail was recorded as spent at Task 10 in the plan.

@@ -3,7 +3,7 @@
 > An underwater, offline-capable Progressive Web App (PWA) clone of *Flappy Bird* with fluid aquatic physics, a 3-Pearl Bubble Shield combo system, procedural Web Audio, and milestone skin unlocks.
 
 [![Live Web App](https://img.shields.io/badge/Play%20Online-GitHub%20Pages-blue?style=for-the-badge&logo=github)](https://warkahkomplot.github.io/flappy-fish-pwa/)
-[![Tests](https://img.shields.io/badge/Vitest-477%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
+[![Tests](https://img.shields.io/badge/Vitest-479%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
 [![PWA](https://img.shields.io/badge/PWA-100%25%20Offline-cyan?style=for-the-badge)](https://warkahkomplot.github.io/flappy-fish-pwa/)
 [![License](https://img.shields.io/badge/License-MIT-amber?style=for-the-badge)](LICENSE)
 
@@ -106,7 +106,7 @@ These are additive overrides for QA only; a normal load uses none of them.
 * **Audio:** Web Audio API procedural synthesizer (zero audio assets).
 * **PWA:** Web App Manifest + Cache-First Service Worker (`public/sw.js`).
 * **CI/CD:** Automated GitHub Actions build and deployment to GitHub Pages on push to `main`.
-* **Testing:** Vitest + React Testing Library (477 unit & integration tests).
+* **Testing:** Vitest + React Testing Library (479 unit & integration tests).
 
 ---
 
@@ -123,7 +123,7 @@ npm install
 # Start local development server (http://localhost:3000)
 npm run dev
 
-# Run full test suite (477 tests)
+# Run full test suite (479 tests)
 npm test
 
 # Build production bundle

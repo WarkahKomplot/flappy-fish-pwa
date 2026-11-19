@@ -157,7 +157,14 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     mockMeasuredStage();
 
     const throwing = fakeBackendThatThrowsOnRender();
-    render(<GameCanvas engine={engine} backendFactory={() => throwing} />);
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => throwing}
+        onEffectiveTierChange={onTier}
+      />
+    );
 
     // The mount effect activates GL once the stage is measured and installs
     // afterRender.
@@ -172,6 +179,7 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
     expect(engine.backgroundVisible).toBe(true);
     expect(engine.afterRender).toBeUndefined();
+    expect(onTier).toHaveBeenLastCalledWith('off');
   });
 
   it('reports Off and keeps the 2D scene when the preference is High but no backend exists', () => {
