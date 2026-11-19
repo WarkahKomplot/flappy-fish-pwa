@@ -126,11 +126,19 @@ describe('PWA & Deployment Pipeline', () => {
       expect(html).toContain('<title>Flappy Fish - Deep Sea Arcade</title>');
     });
 
-    it('contains service worker registration script', () => {
+    it('registers the service worker only from the production entry, not the HTML', () => {
       const html = fs.readFileSync(indexPath, 'utf-8');
-      expect(html).toContain("'serviceWorker' in navigator");
-      expect(html).toContain('navigator.serviceWorker.register');
-      expect(html).toContain('./sw.js');
+      // main.tsx (production-only) owns the v12 registration; a second inline
+      // registration would race it and is deliberately absent.
+      expect(html).not.toContain('navigator.serviceWorker.register');
+
+      const mainCode = fs.readFileSync(
+        path.join(rootDir, 'src/main.tsx'),
+        'utf-8'
+      );
+      expect(mainCode).toContain("'serviceWorker' in navigator");
+      expect(mainCode).toContain('navigator.serviceWorker');
+      expect(mainCode).toContain('sw.js?v=12');
     });
   });
 

@@ -591,6 +591,26 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       // dashed line and the DOM label supplies the text.
       engine.ribbonLabelDom = true;
       updateRibbonLabel(firstFrameSnapshot);
+
+      // The first capture above still contains the baked 2D badge. In the
+      // static freeze mode there is no next rAF to replace it, so re-capture
+      // the scene without that badge and composite one clean frame.
+      if (frozen) {
+        const frozenCtx = sceneCanvas.getContext('2d');
+        try {
+          if (!frozenCtx) {
+            throw new Error('Scene canvas has no 2D context');
+          }
+          engine.render(frozenCtx, capture.width, capture.height, 1);
+          const frozenSnapshot = engine.getSceneSnapshot();
+          controller.render(frozenSnapshot);
+          updateRibbonLabel(frozenSnapshot);
+        } catch {
+          enterFallback();
+          return;
+        }
+      }
+
       engine.afterRender = renderAndRecord;
       if (!disposed) {
         setGlActive(true);

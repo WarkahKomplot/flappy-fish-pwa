@@ -17,17 +17,6 @@
     <link rel="manifest" href="./manifest.json" />
 
     <title>Flappy Fish - Deep Sea Arcade</title>
-
-    <!-- PWA Offline Service Worker Registration -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch((err) => {
-            console.warn('Flappy Fish SW registration failed:', err);
-          });
-        });
-      }
-    </script>
   </head>
   <body class="bg-slate-950 text-slate-100 antialiased overflow-hidden select-none">
     <div id="root"></div>

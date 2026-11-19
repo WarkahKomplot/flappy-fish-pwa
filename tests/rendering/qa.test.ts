@@ -166,6 +166,12 @@ describe('applyVisualFixture', () => {
     expect(snapshot.events).toHaveLength(0);
   });
 
+  it('clears ambient particles so freeze frames are pixel-reproducible', () => {
+    expect(engine.particles.activeCount).toBeGreaterThan(0);
+    applyVisualFixture(engine, 0, 1);
+    expect(engine.particles.activeCount).toBe(0);
+  });
+
   it('keeps top heights inside the playable band for any seed', () => {
     for (const seed of [-99, -1, 0, 1, 7, 1234]) {
       applyVisualFixture(engine, 0, seed);

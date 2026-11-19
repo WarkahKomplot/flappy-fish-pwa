@@ -47,6 +47,9 @@ export function applyVisualFixture(
   engine.fish.invulnerableTime = 0;
 
   engine.comboManager.reset();
+  // Ambient motes are seeded with Math.random at engine construction; clear
+  // them so two page loads with the same fixture are pixel-identical.
+  engine.particles.reset(false);
 
   engine.obstacles = FIXTURE_X.map((x, index) => {
     const topHeight = clamp(
