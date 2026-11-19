@@ -9,13 +9,14 @@ import {
   type GameRect,
 } from '../game/rendering/geometry';
 import type { PostFXBackend } from '../game/rendering/backend';
+import { WebGLBackend } from '../game/rendering/webglBackend';
 import type { FxPreference, QualityTier } from '../game/rendering/types';
 
 const WORLD_WIDTH = PHYSICS_CONSTANTS.CANVAS_WIDTH;
 const WORLD_HEIGHT = PHYSICS_CONSTANTS.CANVAS_HEIGHT;
 
-/** Task 7 swaps this for the real WebGL2 backend. */
-const noBackend = (): PostFXBackend | null => null;
+/** Production factory; tests inject a fake through `backendFactory`. */
+const defaultBackendFactory = (): PostFXBackend => new WebGLBackend();
 
 function visibleDpr(): number {
   return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
@@ -60,9 +61,9 @@ export interface GameCanvasProps {
   fxPreference?: FxPreference;
   onEffectiveTierChange?: (tier: QualityTier) => void;
   /**
-   * Creates the post-FX backend. The default returns null until Task 7 wires
-   * the real WebGL2 implementation, which keeps this task on the Canvas 2D
-   * path by construction.
+   * Creates the post-FX backend. The default is the real WebGL2 backend; the
+   * factory may return null (or the backend's init may fail) to force the
+   * exact Canvas 2D path, which is what the fallback tests do.
    */
   backendFactory?: () => PostFXBackend | null;
 }
@@ -233,6 +234,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         return;
       }
 
+      // Draw one frame *before* hiding the 2D scene. If the GPU path cannot
+      // render, the user never sees a black/frozen stage and we fall back
+      // while the Canvas 2D result is still on screen.
+      try {
+        controller.render(engine.getSceneSnapshot());
+      } catch {
+        enterFallback();
+        return;
+      }
+
       glVisible = true;
       engine.backgroundVisible = false;
       engine.afterRender = (snapshot) => {
@@ -245,6 +256,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       if (!disposed) {
         setGlActive(true);
       }
+
+      // Start the idle rAF loop so the start screen shows the animated
+      // full-bleed background and idle fish before the first tap. This is
+      // idempotent and only runs on the GL path; the 2D fallback keeps
+      // today's start-screen behaviour.
+      engine.startLoop();
     };
 
     let resizeObserver: ResizeObserver | null = null;
@@ -255,7 +272,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       window.addEventListener('resize', updateDimensions);
     }
 
-    const factory = backendFactoryRef.current ?? noBackend;
+    const factory = backendFactoryRef.current ?? defaultBackendFactory;
     let backend: PostFXBackend | null = null;
     try {
       backend = factory();

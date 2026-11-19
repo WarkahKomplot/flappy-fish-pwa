@@ -39,9 +39,15 @@ function fakeBackend(overrides: Partial<PostFXBackend> = {}): PostFXBackend {
 }
 
 function fakeBackendThatThrowsOnRender(): PostFXBackend {
+  // Task 7 renders one frame before hiding the scene canvas; succeed on that
+  // frame and throw on the next so this still exercises a mid-game failure.
+  let frames = 0;
   return fakeBackend({
     beginFrame: vi.fn(() => {
-      throw new Error('gl render boom');
+      frames += 1;
+      if (frames > 1) {
+        throw new Error('gl render boom');
+      }
     }),
   });
 }
@@ -59,16 +65,16 @@ function fakeBackendThatThrowsOnResize(): PostFXBackend {
  * "unmeasured" (keep the 360x640 2D fallback). GL-path tests opt in to a
  * measured 390x844 stage by stubbing the stage container's rect.
  */
-function mockMeasuredStage(): void {
+function mockMeasuredStage(width = 390, height = 844): void {
   const rect = {
     x: 0,
     y: 0,
     top: 0,
     left: 0,
-    right: 390,
-    bottom: 844,
-    width: 390,
-    height: 844,
+    right: width,
+    bottom: height,
+    width,
+    height,
     toJSON: () => rect,
   };
   vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue(
@@ -239,5 +245,85 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(scene.width).toBe(360);
     expect(scene.height).toBe(640);
     expect(backend.resize).not.toHaveBeenCalled();
+  });
+
+  it('falls back when a non-null backend fails to initialise', () => {
+    const onTier = vi.fn();
+    const backend = fakeBackend({ init: vi.fn(() => false) });
+
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(engine.backgroundVisible).toBe(true);
+    expect(engine.afterRender).toBeUndefined();
+    expect(onTier).toHaveBeenLastCalledWith('off');
+    expect(backend.dispose).toHaveBeenCalled();
+  });
+
+  it('caps the scene capture buffer on a large measured stage', () => {
+    mockMeasuredStage(1200, 2000);
+
+    const backend = fakeBackend();
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
+    );
+
+    const scene = screen.getByTestId('game-canvas') as HTMLCanvasElement;
+
+    // 1125x2000 at captureDpr 1.5 would be 5.06 MP; MAX_CAPTURE_PIXELS caps it.
+    expect(scene.width * scene.height).toBeLessThanOrEqual(1_500_000);
+    expect(scene.width).toBe(918);
+    expect(scene.height).toBe(1632);
+  });
+
+  it('renders one first frame before hiding the scene and starts the idle loop', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const startLoop = vi.spyOn(engine, 'startLoop');
+
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
+    );
+
+    expect(backend.beginFrame).toHaveBeenCalledTimes(1);
+    expect(backend.background).toHaveBeenCalledTimes(1);
+    expect(backend.scene).toHaveBeenCalledTimes(1);
+    expect(backend.composite).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('0');
+    expect(startLoop).toHaveBeenCalled();
+  });
+
+  it('does not start the idle loop in the 2D fallback', () => {
+    const startLoop = vi.spyOn(engine, 'startLoop');
+
+    render(<GameCanvas engine={engine} backendFactory={() => null} />);
+
+    expect(startLoop).not.toHaveBeenCalled();
+  });
+
+  it('falls back before hiding the scene when the first GL frame throws', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend({
+      beginFrame: vi.fn(() => {
+        throw new Error('first frame boom');
+      }),
+    });
+    const startLoop = vi.spyOn(engine, 'startLoop');
+
+    render(<GameCanvas engine={engine} backendFactory={() => backend} />);
+
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(backend.dispose).toHaveBeenCalled();
+    expect(startLoop).not.toHaveBeenCalled();
   });
 });

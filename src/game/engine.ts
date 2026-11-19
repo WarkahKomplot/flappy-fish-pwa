@@ -254,11 +254,24 @@ export class GameEngine {
       this.soundEffects.resumeContext();
     }
 
-    if (!this.running && typeof requestAnimationFrame !== 'undefined') {
-      this.running = true;
-      this.lastTime = 0;
-      this.animationFrameId = requestAnimationFrame(this.loop);
+    this.startLoop();
+  }
+
+  /**
+   * Starts the animation loop without touching game status. Used by `start()`
+   * and by the WebGL mount so the start screen can animate the idle fish and
+   * the full-bleed background before the first tap.
+   *
+   * Idempotent: a second call while the loop runs does nothing.
+   */
+  public startLoop(): void {
+    if (this.running || typeof requestAnimationFrame === 'undefined') {
+      return;
     }
+
+    this.running = true;
+    this.lastTime = 0;
+    this.animationFrameId = requestAnimationFrame(this.loop);
   }
 
   /**

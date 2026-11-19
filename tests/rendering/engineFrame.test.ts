@@ -27,6 +27,7 @@ describe('GameEngine frame safety and renderer hooks', () => {
 
   afterEach(() => {
     engine.destroy();
+    vi.unstubAllGlobals();
   });
 
   it('keeps running and disables FX when afterRender throws', () => {
@@ -58,5 +59,37 @@ describe('GameEngine frame safety and renderer hooks', () => {
     engine.backgroundVisible = true;
     engine.render(ctx);
     expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 360, 640);
+  });
+
+  it('startLoop schedules one rAF and is idempotent without changing status', () => {
+    const raf = vi.fn(() => 42);
+    vi.stubGlobal('requestAnimationFrame', raf);
+
+    engine.startLoop();
+    engine.startLoop();
+
+    expect(raf).toHaveBeenCalledTimes(1);
+    expect(engine.status).toBe('idle');
+  });
+
+  it('start() reuses startLoop', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 7));
+    const startLoop = vi.spyOn(engine, 'startLoop');
+
+    engine.start();
+
+    expect(startLoop).toHaveBeenCalledTimes(1);
+    expect(engine.status).toBe('playing');
+  });
+
+  it('destroy cancels the loop started by startLoop', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 99));
+    const cancel = vi.fn();
+    vi.stubGlobal('cancelAnimationFrame', cancel);
+
+    engine.startLoop();
+    engine.destroy();
+
+    expect(cancel).toHaveBeenCalledWith(99);
   });
 });
