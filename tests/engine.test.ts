@@ -371,9 +371,32 @@ describe('GameEngine 60fps Canvas Orchestrator', () => {
       expect(engine.status).toBe('gameover');
       expect(engine.fish.isDead).toBe(true);
       expect(mockSounds.playHit).toHaveBeenCalledTimes(1);
-      expect(gameOverCallback).toHaveBeenCalledWith(5, 5, 3);
+      expect(gameOverCallback).toHaveBeenCalledWith(5, 5, 3, true);
       expect(storage.getHighScore()).toBe(5);
       expect(storage.getLifetimePearls()).toBe(3);
+    });
+
+    it('does not report a new best when the run merely ties the stored best', () => {
+      storage.saveHighScore(5);
+      const tieEngine = new GameEngine({
+        soundEffects: mockSounds,
+        onGameOver: gameOverCallback,
+      });
+      tieEngine.start();
+      tieEngine.score = 5;
+
+      const obs = tieEngine.obstacles[0];
+      obs.x = tieEngine.fish.x - 10;
+      obs.topHeight = tieEngine.fish.y + 20;
+
+      tieEngine.update(1);
+
+      expect(tieEngine.status).toBe('gameover');
+      expect(tieEngine.isNewBest).toBe(false);
+      expect(gameOverCallback).toHaveBeenCalledWith(5, 5, 0, false);
+      expect(storage.getHighScore()).toBe(5);
+
+      tieEngine.destroy();
     });
 
     it('triggers Game Over on unshielded collision with seabed floor', () => {

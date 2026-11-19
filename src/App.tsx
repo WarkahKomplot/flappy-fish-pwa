@@ -13,34 +13,19 @@ import {
   isAudioMuted,
 } from './game/storage';
 import type { GameStatus, SkinId } from './game/types';
-import { MapContainer } from './components/map/MapContainer';
-import { LegacyNavApp } from './components/LegacyNavApp';
-
-function isLegacyNavTest(): boolean {
-  try {
-    const rendered = (MapContainer as any)({});
-    return rendered?.props?.['data-testid'] === 'mock-map';
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Root Application:
  * Seamlessly orchestrates 60fps HTML5 Canvas game engine,
  * HUD overlay, start screen guide, instant retry Game Over modal,
  * and milestone skin wardrobe selector.
+ *
+ * NOTE: the legacy JerayaWara navigation app is intentionally no longer
+ * imported here. Keeping it in the module graph pulled maplibre-gl (~784 KB)
+ * and dexie into every game load. The legacy source still exists for its own
+ * repo/branch but is not part of this bundle. See HANDOFF.md.
  */
 export function App() {
-  // Graceful compatibility fallback when tested by legacy navigation suite
-  if (isLegacyNavTest()) {
-    return <LegacyNavApp />;
-  }
-
-  return <FlappyFishApp />;
-}
-
-function FlappyFishApp() {
   const [status, setStatus] = useState<GameStatus>('idle');
   const [score, setScore] = useState<number>(0);
   const [highScore, setHighScore] = useState<number>(() => getHighScore());
@@ -48,6 +33,7 @@ function FlappyFishApp() {
   const [lifetimePearls, setLifetimePearls] = useState<number>(() => getLifetimePearls());
   const [combo, setCombo] = useState<number>(0);
   const [hasShield, setHasShield] = useState<boolean>(false);
+  const [isNewBest, setIsNewBest] = useState<boolean>(false);
   const [activeSkin, setActiveSkinState] = useState<SkinId>(() => getActiveSkin());
   const [isMuted, setIsMutedState] = useState<boolean>(() => isAudioMuted());
   const [isSkinModalOpen, setIsSkinModalOpen] = useState<boolean>(false);
@@ -65,11 +51,12 @@ function FlappyFishApp() {
         setCombo(newCombo);
         setHasShield(shield);
       },
-      onGameOver: (finalScore, finalHigh, finalRunPearls) => {
+      onGameOver: (finalScore, finalHigh, finalRunPearls, newBest) => {
         setStatus('gameover');
         setScore(finalScore);
         setHighScore(finalHigh);
         setRunPearls(finalRunPearls);
+        setIsNewBest(newBest);
         setLifetimePearls(getLifetimePearls());
       },
     });
@@ -96,6 +83,7 @@ function FlappyFishApp() {
       setRunPearls(0);
       setCombo(0);
       setHasShield(false);
+      setIsNewBest(false);
       setHighScore(getHighScore());
       setLifetimePearls(getLifetimePearls());
     }
@@ -132,6 +120,7 @@ function FlappyFishApp() {
     setRunPearls(0);
     setCombo(0);
     setHasShield(false);
+    setIsNewBest(false);
     setHighScore(getHighScore());
     setLifetimePearls(getLifetimePearls());
   }, [engine]);
@@ -176,6 +165,7 @@ function FlappyFishApp() {
             highScore={highScore}
             runPearls={runPearls}
             lifetimePearls={lifetimePearls}
+            isNewHighScore={isNewBest}
             onRetry={handleRetry}
           />
         )}

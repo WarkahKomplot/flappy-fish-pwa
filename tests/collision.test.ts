@@ -131,19 +131,37 @@ describe('Generous Collision Detection Engine', () => {
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
     });
 
-    it('grants generous near-miss when grazing top kelp within 15% margin', () => {
-      // Top obstacle bottom edge is at y = 200.
-      // Fish center at y = 215: distance to top obstacle is 15px.
-      // Visual radius = 16px (visual penetration = 1px!).
-      // Reduced hitbox radius = 16 * 0.85 = 13.6px.
-      // Since distance (15) > 13.6, player survives!
+    it('grants a generous near-miss at the drawn holdfast bulb tip', () => {
+      // The holdfast is a semicircle centred at (130, topHeight=200) with
+      // radius (60 - 2*8) / 2 = 22, so its lowest painted point is y = 222.
+      // Fish centre at y = 236 sits 36px below the bulb centre.
+      // Generous: 13.6 + 22 = 35.6 < 36 -> survives.
       fish.x = 130;
-      fish.y = 215;
+      fish.y = 236;
 
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
 
-      // Comparing with unscaled hitbox (scale = 1.0): unscaled WOULD collide!
+      // Unscaled radius: 16 + 22 = 38 > 36 -> would collide, proving the margin.
       expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(true);
+    });
+
+    it('treats the painted holdfast bulb as solid below topHeight', () => {
+      // y = 215 is below topHeight (200) but inside the bulb that is actually
+      // drawn there: distance to the bulb centre is 15 < 22 + 13.6.
+      fish.x = 130;
+      fish.y = 215;
+
+      expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
+    });
+
+    it('ignores the 8px transparent gutter on each side of the kelp column', () => {
+      // The painted column spans x = 108..152, not the nominal 100..160.
+      // At x = 93 the fish circle (13.6) stops at 106.6, clear of the art;
+      // the old full-width hitbox would have killed the player here.
+      fish.x = 93;
+      fish.y = 100;
+
+      expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
     });
 
     it('grants generous near-miss when grazing bottom jellyfish within 15% margin', () => {
@@ -160,29 +178,25 @@ describe('Generous Collision Detection Engine', () => {
     });
 
     it('detects collision when penetration exceeds 15% generous margin', () => {
-      // Top obstacle at y = 200. Fish center at y = 212.
-      // Distance is 12px < 13.6px -> collision!
+      // Top kelp: fish is 12px below topHeight, i.e. inside the holdfast bulb.
+      // Bottom jellyfish: fish is 12px above bottomY, inside the 13.6px hitbox.
       fish.x = 130;
       fish.y = 212;
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
 
-      // Bottom obstacle at y = 340. Fish center at y = 328.
-      // Distance is 12px < 13.6px -> collision!
       fish.y = 328;
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
     });
 
-    it('handles obstacle horizontal corner near-misses', () => {
-      // Top-left corner of gap opening is at (100, 200).
-      // Fish approaching diagonally at (90, 210).
-      // Distance to corner = sqrt(10^2 + 10^2) = sqrt(200) ≈ 14.14px.
-      // Visual radius (16) > 14.14 -> visually clips corner!
-      // Generous radius (13.6) < 14.14 -> generous near-miss passes safely!
+    it('treats the kelp holdfast corner as rounded, matching the art', () => {
+      // The column starts at x = 108 (100 + 8px inset), not at the nominal 100,
+      // and the bulb rounds the corner. (90, 210) is ~20.6px from that corner,
+      // so it is clear even with the full 16px radius.
       fish.x = 90;
       fish.y = 210;
 
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
-      expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(true);
+      expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(false);
     });
   });
 });

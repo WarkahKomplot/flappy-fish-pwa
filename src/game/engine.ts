@@ -43,7 +43,17 @@ export interface GameEngineOptions {
   canvas?: HTMLCanvasElement | null;
   onScoreChange?: (score: number) => void;
   onComboChange?: (combo: number, shield: boolean) => void;
-  onGameOver?: (score: number, highScore: number, pearls: number) => void;
+  /**
+   * isNewBest is true only when this run strictly beat the previous best.
+   * It must be computed before the new high score is persisted, otherwise a
+   * tie would incorrectly be reported as a new record.
+   */
+  onGameOver?: (
+    score: number,
+    highScore: number,
+    pearls: number,
+    isNewBest: boolean
+  ) => void;
   soundEffects?: SoundEffects;
   activeSkin?: SkinId;
 }
@@ -58,6 +68,8 @@ export class GameEngine {
   public score: number = 0;
   public highScore: number = 0;
   public runPearls: number = 0;
+  /** True only when the finished run strictly beat the previous high score. */
+  public isNewBest: boolean = false;
   public fish: FishEntity;
   public obstacles: ObstacleEntity[] = [];
   public comboManager: ComboManager;
@@ -66,7 +78,12 @@ export class GameEngine {
 
   public onScoreChange?: (score: number) => void;
   public onComboChange?: (combo: number, shield: boolean) => void;
-  public onGameOver?: (score: number, highScore: number, pearls: number) => void;
+  public onGameOver?: (
+    score: number,
+    highScore: number,
+    pearls: number,
+    isNewBest: boolean
+  ) => void;
 
   public ribbonX: number = -9999;
   public ribbonCrossed: boolean = false;
@@ -151,6 +168,7 @@ export class GameEngine {
     this.status = 'idle';
     this.score = 0;
     this.runPearls = 0;
+    this.isNewBest = false;
     this.highScore = getHighScore();
     this.gameTime = 0;
 
@@ -460,15 +478,21 @@ export class GameEngine {
     this.fish.isDead = true;
     this.soundEffects.playHit();
 
+    // Capture the comparison before saveHighScore() mutates the stored record,
+    // otherwise tying the old best would be reported as "NEW BEST!".
+    const previousBest = this.highScore;
+    const isNewBest = this.score > previousBest;
+    this.isNewBest = isNewBest;
+
     saveHighScore(this.score);
-    this.highScore = Math.max(this.highScore, this.score);
+    this.highScore = Math.max(previousBest, this.score);
 
     if (this.runPearls > 0) {
       addLifetimePearls(this.runPearls);
     }
 
     if (this.onGameOver) {
-      this.onGameOver(this.score, this.highScore, this.runPearls);
+      this.onGameOver(this.score, this.highScore, this.runPearls, isNewBest);
     }
   }
 
@@ -560,8 +584,13 @@ export class GameEngine {
    */
   private drawObstacles(ctx: CanvasRenderingContext2D): void {
     const worldHeight = PHYSICS_CONSTANTS.CANVAS_HEIGHT;
+    // Single source of truth shared with checkFishObstacleCollision(): the kelp
+    // column is inset by this much on each side and capped with a bulb of the
+    // remaining half-width. Keep the art and the hitbox in lockstep.
+    const inset = PHYSICS_CONSTANTS.KELP_SIDE_INSET;
 
     for (const obs of this.obstacles) {
+      const bulbRadius = Math.max(0, (obs.width - inset * 2) / 2);
       if (obs.x + obs.width < -10 || obs.x > PHYSICS_CONSTANTS.CANVAS_WIDTH + 10) {
         continue;
       }
@@ -579,14 +608,14 @@ export class GameEngine {
 
       // Main kelp column
       ctx.fillStyle = kelpGrad;
-      ctx.fillRect(obs.x + 8, 0, obs.width - 16, obs.topHeight);
+      ctx.fillRect(obs.x + inset, 0, obs.width - inset * 2, obs.topHeight);
 
       // Bulbous bottom tip / kelp holdfast
       ctx.beginPath();
       ctx.arc(
         obs.x + obs.width / 2,
         obs.topHeight,
-        (obs.width - 16) / 2,
+        bulbRadius,
         0,
         Math.PI
       );
@@ -601,25 +630,25 @@ export class GameEngine {
 
         // Left frond
         ctx.beginPath();
-        ctx.moveTo(obs.x + 8, fy);
+        ctx.moveTo(obs.x + inset, fy);
         ctx.quadraticCurveTo(
           obs.x - 12 + frondSway, fy - 10,
           obs.x - 16 + frondSway, fy + 8
         );
-        ctx.quadraticCurveTo(obs.x + 4, fy + 12, obs.x + 8, fy + 14);
+        ctx.quadraticCurveTo(obs.x + inset / 2, fy + 12, obs.x + inset, fy + 14);
         ctx.fillStyle = 'rgba(16, 185, 129, 0.75)';
         ctx.fill();
 
         // Right frond
         ctx.beginPath();
-        ctx.moveTo(obs.x + obs.width - 8, fy + 10);
+        ctx.moveTo(obs.x + obs.width - inset, fy + 10);
         ctx.quadraticCurveTo(
           obs.x + obs.width + 12 - frondSway, fy,
           obs.x + obs.width + 16 - frondSway, fy + 18
         );
         ctx.quadraticCurveTo(
-          obs.x + obs.width - 4, fy + 22,
-          obs.x + obs.width - 8, fy + 24
+          obs.x + obs.width - inset / 2, fy + 22,
+          obs.x + obs.width - inset, fy + 24
         );
         ctx.fillStyle = 'rgba(5, 150, 105, 0.75)';
         ctx.fill();

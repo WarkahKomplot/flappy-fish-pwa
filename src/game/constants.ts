@@ -47,6 +47,10 @@ export const PHYSICS_CONSTANTS = {
   CANVAS_HEIGHT: 640,
   OBSTACLE_WIDTH: 60,
   OBSTACLE_GAP: 140,
+  // Shared by the kelp renderer and the kelp hitbox so the art and collision
+  // can never drift apart again (the column is drawn this many px in from
+  // each side of the obstacle's nominal width).
+  KELP_SIDE_INSET: 8,
   OBSTACLE_SPACING: 200,
   HORIZONTAL_SPEED: 2.8,
   PEARL_SPAWN_CHANCE: 0.6,

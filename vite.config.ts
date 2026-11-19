@@ -10,8 +10,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          maplibre: ['maplibre-gl'],
-          dexie: ['dexie'],
+          // Only React is part of the game's runtime graph now. maplibre-gl and
+          // dexie belonged to the legacy navigation app and are no longer
+          // imported by src/main.tsx -> src/App.tsx, so they must not be forced
+          // into chunks here (that would re-add ~880 KB to every load).
           vendor: ['react', 'react-dom']
         }
       }

@@ -21,7 +21,11 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   runPearls,
   lifetimePearls,
   onRetry,
-  isNewHighScore = score > 0 && score >= highScore,
+  // Must be supplied by the caller (the engine compares against the previous
+  // best before saving). Defaulting to `score >= highScore` was wrong: by the
+  // time this renders, highScore already includes the current run, so a tie
+  // was celebrated as a new record.
+  isNewHighScore = false,
 }) => {
   // Listen for Space/Enter key for instant desktop keyboard retry
   useEffect(() => {

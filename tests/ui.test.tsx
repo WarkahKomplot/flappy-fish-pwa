@@ -180,6 +180,34 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       fireEvent.click(modal);
       expect(onRetry).toHaveBeenCalledTimes(2);
     });
+
+    it('does not celebrate a tie as a new best', () => {
+      const { rerender } = render(
+        <GameOverModal
+          score={5}
+          highScore={5}
+          runPearls={0}
+          lifetimePearls={10}
+          onRetry={vi.fn()}
+        />
+      );
+
+      // score === highScore is a tie, not a new record
+      expect(screen.queryByText(/NEW BEST/i)).toBeNull();
+
+      rerender(
+        <GameOverModal
+          score={6}
+          highScore={6}
+          runPearls={0}
+          lifetimePearls={10}
+          isNewHighScore={true}
+          onRetry={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/NEW BEST/i)).toBeDefined();
+    });
   });
 
   describe('SkinSelector Component', () => {

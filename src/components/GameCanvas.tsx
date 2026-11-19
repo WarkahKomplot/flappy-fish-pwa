@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { GameEngine } from '../game/engine';
+import { computeStageSize } from '../game/layout';
 
 export interface GameCanvasProps {
   engine: GameEngine;
@@ -30,8 +31,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const updateDimensions = () => {
       const rect = container.getBoundingClientRect();
-      const width = rect.width || 360;
-      const height = rect.height || 640;
+      // Keep the 9:16 world intact and letterbox it instead of stretching it.
+      // This is what keeps the engine's X/Y scale equal on every screen.
+      const { width, height } = computeStageSize(rect.width, rect.height);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
       const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
       engine.resize(width, height, dpr);
     };
@@ -72,8 +76,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
     };
 
-    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-    canvas.addEventListener('pointerdown', handlePointerDown);
+    // Listen on the full stage container, not just the canvas: after
+    // letterboxing, the bars above/below the 9:16 canvas must still register
+    // taps, otherwise the bottom strip becomes a dead zone in a one-tap game.
+    container.addEventListener('touchstart', handleTouchStart, { passive: false });
+    container.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
@@ -82,8 +89,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       } else {
         window.removeEventListener('resize', updateDimensions);
       }
-      canvas.removeEventListener('touchstart', handleTouchStart);
-      canvas.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [engine, onTap]);
@@ -91,13 +98,15 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full overflow-hidden select-none touch-none ${className}`}
+      className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-[#010a17] select-none touch-none ${className}`}
       style={{ touchAction: 'none' }}
     >
+      {/* The canvas is sized in JS by computeStageSize() to a strict 9:16 box;
+          the surrounding area is intentionally letterboxed. */}
       <canvas
         ref={canvasRef}
         data-testid="game-canvas"
-        className="w-full h-full block touch-none cursor-pointer"
+        className="block touch-none cursor-pointer"
         style={{ touchAction: 'none' }}
       />
     </div>

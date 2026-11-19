@@ -64,6 +64,25 @@ export function updateFishPhysics(fish: FishEntity, dt: number = 1): void {
 }
 
 /**
+ * Checks intersection between two circles.
+ * Used for the kelp holdfast bulb, which is drawn as a semicircle below the
+ * kelp column and must therefore also be part of the collision shape.
+ */
+export function circleIntersectsCircle(
+  cx1: number,
+  cy1: number,
+  r1: number,
+  cx2: number,
+  cy2: number,
+  r2: number
+): boolean {
+  const dx = cx1 - cx2;
+  const dy = cy1 - cy2;
+  const combinedRadius = r1 + r2;
+  return dx * dx + dy * dy < combinedRadius * combinedRadius;
+}
+
+/**
  * Checks intersection between a circle and an Axis-Aligned Bounding Box (AABB).
  */
 export function circleIntersectsAABB(
@@ -100,6 +119,12 @@ export function checkFishBoundsCollision(
 /**
  * Checks collision between the fish and an obstacle pair (top kelp + bottom jellyfish).
  * Applies a 15% reduction in collision bounds (HITBOX_SCALE: 0.85) to provide forgiving "near-miss" satisfaction.
+ *
+ * The top kelp hitbox mirrors exactly what drawObstacles() paints: an inset
+ * column (KELP_SIDE_INSET px in from each side) plus the semicircular holdfast
+ * bulb hanging below topHeight. Before this, the hitbox was the full nominal
+ * width and stopped at topHeight, so players could die on 8px of invisible wall
+ * and swim through the visibly solid bulb.
  */
 export function checkFishObstacleCollision(
   fish: FishEntity,
@@ -107,19 +132,32 @@ export function checkFishObstacleCollision(
   hitboxScale: number = PHYSICS_CONSTANTS.HITBOX_SCALE
 ): boolean {
   const effectiveRadius = fish.radius * hitboxScale;
+  const inset = PHYSICS_CONSTANTS.KELP_SIDE_INSET;
+  const bulbRadius = Math.max(0, (obstacle.width - inset * 2) / 2);
 
-  // Top kelp obstacle: descends from ceiling y=0 down to y=obstacle.topHeight
-  const hitTop = circleIntersectsAABB(
+  // Top kelp obstacle: inset column descending from ceiling y=0 to y=obstacle.topHeight
+  const hitKelpColumn = circleIntersectsAABB(
     fish.x,
     fish.y,
     effectiveRadius,
-    obstacle.x,
+    obstacle.x + inset,
     0,
-    obstacle.x + obstacle.width,
+    obstacle.x + obstacle.width - inset,
     obstacle.topHeight
   );
 
-  if (hitTop) {
+  // Top kelp holdfast: the semicircular bulb rendered below topHeight.
+  // Testing the full circle is safe because its upper half sits inside the column.
+  const hitKelpBulb = circleIntersectsCircle(
+    fish.x,
+    fish.y,
+    effectiveRadius,
+    obstacle.x + obstacle.width / 2,
+    obstacle.topHeight,
+    bulbRadius
+  );
+
+  if (hitKelpColumn || hitKelpBulb) {
     return true;
   }
 

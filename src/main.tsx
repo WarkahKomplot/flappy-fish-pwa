@@ -6,15 +6,15 @@ import './index.css';
 // Register PWA Service Worker
 if ('serviceWorker' in navigator && (import.meta.env.PROD || process.env.NODE_ENV === 'production')) {
   window.addEventListener('load', () => {
-    const swUrl = `${import.meta.env.BASE_URL}sw.js?v=10`;
+    const swUrl = `${import.meta.env.BASE_URL}sw.js?v=11`;
     navigator.serviceWorker
       .register(swUrl)
       .then(reg => {
         reg.update();
-        console.log('JerayaWara PWA Service Worker registered:', reg.scope);
+        console.log('Flappy Fish PWA Service Worker registered:', reg.scope);
       })
       .catch(err => {
-        console.warn('JerayaWara Service Worker registration failed:', err);
+        console.warn('Flappy Fish Service Worker registration failed:', err);
       });
   });
 }
