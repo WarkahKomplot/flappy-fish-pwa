@@ -8,6 +8,8 @@ export interface StartScreenProps {
   activeSkin: SkinId;
   onOpenSkins: () => void;
   onStart?: () => void;
+  /** Opens the Auto/High/Medium/Low/Off panel without starting a run. */
+  onOpenFx?: () => void;
 }
 
 /**
@@ -23,6 +25,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   activeSkin,
   onOpenSkins,
   onStart,
+  onOpenFx,
 }) => {
   const currentSkinDef = SKIN_DEFINITIONS[activeSkin] ?? SKIN_DEFINITIONS['neon-tetra'];
 
@@ -77,7 +80,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         className="w-full flex flex-col items-center pb-8 space-y-3"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center justify-center gap-2">
           {/* Current skin badge */}
           <div
             data-testid="current-skin-badge"
@@ -101,6 +104,22 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           >
             <span>🐠</span>
             <span>Skins</span>
+          </button>
+
+          {/* Compact FX emergency switch. stopPropagation is mandatory here:
+              the start screen itself is the tap-to-start target. */}
+          <button
+            type="button"
+            data-testid="fx-open-button"
+            aria-label="Open visual effects settings"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenFx?.();
+            }}
+            className="flex h-11 items-center space-x-1.5 rounded-xl border border-cyan-500/40 bg-slate-900/80 px-3 text-xs font-bold text-cyan-200 shadow-lg backdrop-blur-md transition-transform active:scale-95 hover:bg-slate-800/80"
+          >
+            <span>✨</span>
+            <span>FX</span>
           </button>
         </div>
       </div>

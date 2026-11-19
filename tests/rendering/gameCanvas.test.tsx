@@ -414,4 +414,138 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(backend.dispose).toHaveBeenCalled();
     expect(startLoop).not.toHaveBeenCalled();
   });
+
+  it('re-measures and resizes an initialised controller when switching Off to High', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const factory = vi.fn(() => backend);
+    const onTier = vi.fn();
+    const { rerender } = render(
+      <GameCanvas
+        engine={engine}
+        fxPreference="off"
+        backendFactory={factory}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    // Off still brings up the controller so a later switch can reuse it.
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(backend.init).toHaveBeenCalledTimes(1);
+    expect(backend.dispose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(onTier).toHaveBeenLastCalledWith('off');
+
+    rerender(
+      <GameCanvas
+        engine={engine}
+        fxPreference="high"
+        backendFactory={factory}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    // The live controller is reused: no second backend and no second init.
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(backend.init).toHaveBeenCalledTimes(1);
+    expect(backend.dispose).not.toHaveBeenCalled();
+
+    // Re-measured and resized, so the backend gets a viewport and FBOs.
+    expect(backend.resize).toHaveBeenCalledWith(
+      390,
+      844,
+      { x: 0, y: 75.5, width: 390, height: 693 },
+      expect.objectContaining({ tier: 'high' })
+    );
+    expect(onTier).toHaveBeenLastCalledWith('high');
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('0');
+    expect(screen.getByTestId('fx-canvas').style.display).not.toBe('none');
+    expect(engine.backgroundVisible).toBe(false);
+    expect(engine.afterRender).toBeTypeOf('function');
+
+    const scene = screen.getByTestId('game-canvas') as HTMLCanvasElement;
+    expect(scene.width).toBe(585);
+    expect(scene.height).toBe(1040);
+  });
+
+  it('attempts a fresh init when selecting High after a failed init', () => {
+    mockMeasuredStage();
+
+    const first = fakeBackend({ init: vi.fn(() => false) });
+    const second = fakeBackend({ init: vi.fn(() => false) });
+    const factory = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const onTier = vi.fn();
+
+    const { rerender } = render(
+      <GameCanvas
+        engine={engine}
+        fxPreference="off"
+        backendFactory={factory}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(onTier).toHaveBeenLastCalledWith('off');
+
+    rerender(
+      <GameCanvas
+        engine={engine}
+        fxPreference="high"
+        backendFactory={factory}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    // The dead controller was replaced by a brand-new backend attempt.
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(first.dispose).toHaveBeenCalled();
+    expect(second.init).toHaveBeenCalledTimes(1);
+    expect(second.dispose).toHaveBeenCalled();
+
+    // The fresh init failed too: exact 2D scene, never a GL tier on screen.
+    expect(onTier).toHaveBeenLastCalledWith('off');
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(engine.backgroundVisible).toBe(true);
+    expect(engine.afterRender).toBeUndefined();
+  });
+
+  it('never reports a GL tier when switching from Off to High fails', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackendThatThrowsOnResize();
+    const onTier = vi.fn();
+
+    const { rerender } = render(
+      <GameCanvas
+        engine={engine}
+        fxPreference="off"
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    expect(onTier).toHaveBeenLastCalledWith('off');
+
+    rerender(
+      <GameCanvas
+        engine={engine}
+        fxPreference="high"
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+
+    // setPreference may announce High before the resize/first frame proves the
+    // switch; Off must be the last report and the 2D scene must be visible.
+    const tiers = onTier.mock.calls.map(([tier]) => tier);
+    expect(tiers[tiers.length - 1]).toBe('off');
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(engine.backgroundVisible).toBe(true);
+    expect(engine.afterRender).toBeUndefined();
+    expect(backend.dispose).toHaveBeenCalled();
+  });
 });

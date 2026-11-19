@@ -93,12 +93,18 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const [glActive, setGlActive] = useState(false);
 
   // Latest-prop refs: the mount-only effect reads these once, and a later
-  // Task 10 preference switch can change them without re-initialising GL.
+  // preference switch can change them without re-initialising GL.
   const onTapRef = useRef(onTap);
   const fxPreferenceRef = useRef(fxPreference);
   const backendFactoryRef = useRef(backendFactory);
   const onEffectiveTierChangeRef = useRef(onEffectiveTierChange);
   const glMountedRef = useRef(false);
+  // Set by the mount effect so the preference-change effect can drive the one
+  // shared applyPreference path; null while unmounted.
+  const applyPreferenceRef = useRef<((pref: FxPreference) => void) | null>(null);
+  // The last preference the effect applied. Guards against double-applying the
+  // initial value when the change effect runs right after mount.
+  const appliedPreferenceRef = useRef<FxPreference | null>(null);
 
   useEffect(() => {
     onTapRef.current = onTap;
@@ -140,6 +146,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     let available = false;
     let glVisible = false;
     let disposed = false;
+    let hasApplied = false;
+
+    const reducedMotion = prefersReducedMotion();
+    // Hardware heuristics for the Auto option. `webgl2` is asserted because
+    // this value is only consumed while a GL controller is being attempted;
+    // a failed init still reports Off through the fallback path.
+    const autoTier = selectQuality({
+      webgl2: true,
+      reducedMotion,
+      hardwareConcurrency:
+        (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4,
+      deviceMemory: readDeviceMemory(),
+      isDesktop: isDesktopPointer(),
+      override: null,
+    });
 
     const positionScene = (gameRect: GameRect) => {
       // Fractional origin on purpose: rounding 75.5 to 75 leaves a one-pixel
@@ -283,6 +304,109 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       engine.startLoop();
     };
 
+    /**
+     * Builds a brand-new controller/backend. Used on the first mount and
+     * whenever a failed init or render throw left no live controller. Returns
+     * null after restoring the Canvas 2D scene and reporting Off.
+     */
+    const createController = (): PostFXController | null => {
+      const factory = backendFactoryRef.current ?? defaultBackendFactory;
+      let backend: PostFXBackend | null = null;
+      try {
+        backend = factory();
+      } catch {
+        backend = null;
+      }
+
+      if (!backend) {
+        enterFallback();
+        return null;
+      }
+
+      const next = new PostFXController(backend, {
+        reducedMotion,
+        onTierChange: (tier) => {
+          // Only report while the controller is usable; any failure reports
+          // Off through enterFallback, which always runs last.
+          if (available && !disposed) {
+            onEffectiveTierChangeRef.current?.(tier);
+          }
+        },
+      });
+      controller = next;
+
+      let initialised = false;
+      try {
+        initialised = next.init(fxCanvas, sceneCanvas);
+      } catch {
+        initialised = false;
+      }
+
+      if (!initialised) {
+        available = false;
+        enterFallback();
+        return null;
+      }
+
+      available = true;
+      return next;
+    };
+
+    /**
+     * The single mount/preference-switch entry point.
+     * - With a live controller: setPreference in try/catch, then re-measure
+     *   and resize. Off keeps the controller alive but hands the stage back to
+     *   the exact Canvas 2D scene; Off→High therefore gets a viewport/FBO.
+     * - Without one (failed init or a previous render throw): a GL tier runs a
+     *   fresh init → setPreference → resize → first frame. Off only stays on
+     *   the 2D scene, and any failure reports Off last.
+     */
+    const applyPreference = (pref: FxPreference) => {
+      if (disposed) {
+        return;
+      }
+
+      appliedPreferenceRef.current = pref;
+      const isInitial = !hasApplied;
+      hasApplied = true;
+
+      if (controller) {
+        try {
+          controller.setPreference(pref, autoTier);
+        } catch {
+          enterFallback();
+          return;
+        }
+        updateDimensions();
+        return;
+      }
+
+      const desiredTier = pref === 'auto' ? autoTier : pref;
+      if (!isInitial && desiredTier === 'off') {
+        // Off keeps the exact 2D path and does not pay for a new context.
+        showSceneOnly();
+        sizeFallback();
+        onEffectiveTierChangeRef.current?.('off');
+        return;
+      }
+
+      // The first mount always probes the backend, even for Off, so a live
+      // controller is ready to reuse if the user later picks a GL tier.
+      const next = createController();
+      if (!next) {
+        return;
+      }
+
+      try {
+        next.setPreference(pref, autoTier);
+      } catch {
+        enterFallback();
+        return;
+      }
+
+      updateDimensions();
+    };
+
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(updateDimensions);
@@ -291,66 +415,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       window.addEventListener('resize', updateDimensions);
     }
 
-    const factory = backendFactoryRef.current ?? defaultBackendFactory;
-    let backend: PostFXBackend | null = null;
-    try {
-      backend = factory();
-    } catch {
-      backend = null;
-    }
-
-    if (!backend) {
-      enterFallback();
-    } else {
-      const reducedMotion = prefersReducedMotion();
-      controller = new PostFXController(backend, {
-        reducedMotion,
-        onTierChange: (tier) => {
-          // Only report while the controller is usable; init failure reports
-          // Off through enterFallback below.
-          if (available && !disposed) {
-            onEffectiveTierChangeRef.current?.(tier);
-          }
-        },
-      });
-
-      let initialised = false;
-      try {
-        initialised = controller.init(fxCanvas, sceneCanvas);
-      } catch {
-        initialised = false;
-      }
-
-      if (!initialised) {
-        available = false;
-        enterFallback();
-      } else {
-        available = true;
-        const autoTier = selectQuality({
-          webgl2: true,
-          reducedMotion,
-          hardwareConcurrency:
-            (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4,
-          deviceMemory: readDeviceMemory(),
-          isDesktop: isDesktopPointer(),
-          override: null,
-        });
-
-        try {
-          controller.setPreference(fxPreferenceRef.current, autoTier);
-        } catch {
-          enterFallback();
-        }
-
-        if (available) {
-          updateDimensions();
-        }
-      }
-    }
+    applyPreferenceRef.current = applyPreference;
+    applyPreference(fxPreferenceRef.current);
 
     return () => {
       disposed = true;
       glMountedRef.current = false;
+      applyPreferenceRef.current = null;
+      appliedPreferenceRef.current = null;
 
       if (resizeObserver) {
         resizeObserver.disconnect();
@@ -372,6 +444,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
     };
   }, [engine]);
+
+  // Preference changes after mount use the same applyPreference path as the
+  // initial application, so a live controller is switched in place and a dead
+  // one is recreated. The mount effect already applied the initial value.
+  useEffect(() => {
+    if (appliedPreferenceRef.current === fxPreference) {
+      return;
+    }
+    applyPreferenceRef.current?.(fxPreference);
+  }, [fxPreference]);
 
   useEffect(() => {
     const container = containerRef.current;

@@ -10,6 +10,8 @@ export interface HUDProps {
   onTogglePause: () => void;
   onToggleMute: () => void;
   status: GameStatus;
+  /** Opens the FX panel from the pause overlay. */
+  onOpenFx?: () => void;
 }
 
 /**
@@ -28,6 +30,7 @@ export const HUD: React.FC<HUDProps> = ({
   onTogglePause,
   onToggleMute,
   status,
+  onOpenFx,
 }) => {
   const isPlayingOrPaused = status === 'playing' || status === 'paused';
 
@@ -116,7 +119,20 @@ export const HUD: React.FC<HUDProps> = ({
 
       {/* Bottom spacer / touch guide placeholder if paused */}
       {isPaused && (
-        <div className="flex justify-center pb-8">
+        <div className="flex flex-col items-center gap-3 pb-8">
+          {/* The pause overlay is the primary FX entry point; the parent HUD is
+              pointer-events-none, so this control opts back in. */}
+          <button
+            type="button"
+            data-testid="fx-open-button"
+            onClick={onOpenFx}
+            aria-label="Open visual effects settings"
+            className="pointer-events-auto flex h-11 items-center space-x-1.5 rounded-xl border border-cyan-500/40 bg-slate-900/80 px-3 text-xs font-bold text-cyan-200 shadow-lg backdrop-blur-md transition-transform active:scale-95 hover:bg-slate-800/80"
+          >
+            <span aria-hidden="true">✨</span>
+            <span>FX</span>
+          </button>
+
           <div className="rounded-xl bg-slate-900/90 border border-cyan-500/40 px-6 py-3 text-center text-sm font-semibold text-cyan-200 shadow-2xl backdrop-blur-md animate-pulse">
             Game Paused — Tap Resume to continue
           </div>

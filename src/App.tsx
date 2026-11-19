@@ -4,6 +4,7 @@ import { HUD } from './components/HUD';
 import { StartScreen } from './components/StartScreen';
 import { GameOverModal } from './components/GameOverModal';
 import { SkinSelector } from './components/SkinSelector';
+import { FxPanel } from './components/FxPanel';
 import { GameEngine } from './game/engine';
 import {
   getHighScore,
@@ -16,8 +17,9 @@ import {
   loadFxPreference,
   parseFxOverride,
   resolveFxPreference,
+  saveFxPreference,
 } from './game/rendering/fxSettings';
-import type { FxPreference } from './game/rendering/types';
+import type { FxPreference, QualityTier } from './game/rendering/types';
 import type { GameStatus, SkinId } from './game/types';
 
 /**
@@ -44,8 +46,8 @@ export function App() {
   const [isMuted, setIsMutedState] = useState<boolean>(() => isAudioMuted());
   const [isSkinModalOpen, setIsSkinModalOpen] = useState<boolean>(false);
   // URL `?fx=` wins for this session, then the persisted choice, then Auto.
-  // Task 10 adds the panel that changes this at runtime.
-  const [fxPreference] = useState<FxPreference>(() =>
+  // Selecting an option in the panel saves it and updates this state.
+  const [fxPreference, setFxPreference] = useState<FxPreference>(() =>
     resolveFxPreference(
       parseFxOverride(
         typeof window !== 'undefined' ? window.location.search : ''
@@ -53,6 +55,8 @@ export function App() {
       loadFxPreference()
     )
   );
+  const [effectiveTier, setEffectiveTier] = useState<QualityTier>('off');
+  const [isFxOpen, setIsFxOpen] = useState<boolean>(false);
 
   // Singleton GameEngine reference
   const engineRef = useRef<GameEngine | null>(null);
@@ -128,6 +132,16 @@ export function App() {
     [engine]
   );
 
+  // FX preference: persist first, then let GameCanvas apply the change. The
+  // panel stays open so the resolved tier line can show the result.
+  const handleSelectFx = useCallback((pref: FxPreference) => {
+    saveFxPreference(pref);
+    setFxPreference(pref);
+  }, []);
+
+  const handleOpenFx = useCallback(() => setIsFxOpen(true), []);
+  const handleCloseFx = useCallback(() => setIsFxOpen(false), []);
+
   // Instant retry (<0.2s transition)
   const handleRetry = useCallback(() => {
     engine.start();
@@ -149,7 +163,12 @@ export function App() {
         style={{ touchAction: 'none' }}
       >
         {/* 60fps Canvas 2D Engine Viewport (with the WebGL compositor canvas) */}
-        <GameCanvas engine={engine} onTap={handleTap} fxPreference={fxPreference} />
+        <GameCanvas
+          engine={engine}
+          onTap={handleTap}
+          fxPreference={fxPreference}
+          onEffectiveTierChange={setEffectiveTier}
+        />
 
         {/* In-Game HUD: Score, Pearl Combo, Shield, Pause, Mute */}
         <HUD
@@ -161,6 +180,7 @@ export function App() {
           onTogglePause={handleTogglePause}
           onToggleMute={handleToggleMute}
           status={status}
+          onOpenFx={handleOpenFx}
         />
 
         {/* Start Screen Overlay: Tap to Swim Guide & Wardrobe */}
@@ -171,6 +191,7 @@ export function App() {
             activeSkin={activeSkin}
             onOpenSkins={() => setIsSkinModalOpen(true)}
             onStart={handleTap}
+            onOpenFx={handleOpenFx}
           />
         )}
 
@@ -193,6 +214,16 @@ export function App() {
           activeSkin={activeSkin}
           lifetimePearls={lifetimePearls}
           onSelectSkin={handleSelectSkin}
+        />
+
+        {/* Auto/High/Medium/Low/Off emergency quality switch. It is a single
+            instance shared by the start screen and the pause overlay. */}
+        <FxPanel
+          isOpen={isFxOpen}
+          preference={fxPreference}
+          effectiveTier={effectiveTier}
+          onSelect={handleSelectFx}
+          onClose={handleCloseFx}
         />
       </main>
     </div>

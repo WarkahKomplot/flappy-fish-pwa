@@ -132,6 +132,42 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       fireEvent.click(muteBtn);
       expect(onToggleMute).toHaveBeenCalledTimes(1);
     });
+
+    it('shows the FX control only while paused and calls onOpenFx', () => {
+      const onOpenFx = vi.fn();
+      const { rerender } = render(
+        <HUD
+          score={5}
+          combo={0}
+          hasShield={false}
+          isPaused={false}
+          isMuted={false}
+          onTogglePause={vi.fn()}
+          onToggleMute={vi.fn()}
+          status="playing"
+          onOpenFx={onOpenFx}
+        />
+      );
+
+      expect(screen.queryByTestId('fx-open-button')).toBeNull();
+
+      rerender(
+        <HUD
+          score={5}
+          combo={0}
+          hasShield={false}
+          isPaused={true}
+          isMuted={false}
+          onTogglePause={vi.fn()}
+          onToggleMute={vi.fn()}
+          status="paused"
+          onOpenFx={onOpenFx}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      expect(onOpenFx).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('StartScreen Component', () => {
@@ -154,6 +190,26 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       const skinsBtn = screen.getByTestId('skins-button');
       fireEvent.click(skinsBtn);
       expect(onOpenSkins).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens the FX control without starting the game', () => {
+      const onStart = vi.fn();
+      const onOpenFx = vi.fn();
+
+      render(
+        <StartScreen
+          highScore={15}
+          lifetimePearls={75}
+          activeSkin="neon-tetra"
+          onOpenSkins={vi.fn()}
+          onStart={onStart}
+          onOpenFx={onOpenFx}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      expect(onOpenFx).toHaveBeenCalledTimes(1);
+      expect(onStart).not.toHaveBeenCalled();
     });
   });
 
@@ -339,6 +395,38 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       const closeBtn = screen.getByTestId('close-skins-modal');
       fireEvent.click(closeBtn);
       expect(screen.queryByTestId('skin-selector-modal')).toBeNull();
+    });
+
+    it('opens the FX panel from the start screen without starting a run', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+
+      expect(screen.getByTestId('fx-panel')).toBeDefined();
+      expect(screen.getByTestId('fx-effective-tier').textContent).toContain('Off');
+      // The game stays on the start screen; opening FX is not a tap-to-start.
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('fx-panel')).toBeNull();
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+    });
+
+    it('persists the selected FX preference and restores it on a new session', () => {
+      const first = render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      fireEvent.click(screen.getByTestId('fx-option-medium'));
+
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('medium');
+      expect(screen.getByTestId('fx-option-medium').getAttribute('aria-checked')).toBe('true');
+
+      first.unmount();
+
+      render(<App />);
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+
+      expect(screen.getByTestId('fx-option-medium').getAttribute('aria-checked')).toBe('true');
     });
   });
 });
