@@ -33,7 +33,7 @@ void main() {
     alpha = (1.0 - k) * 0.28;
     size = 2.2;
   }
-  vec2 px = stage + uShake + aPos * size;
+  vec2 px = stage + uShake + (aPos - vec2(0.5)) * size;
   gl_Position = vec4(
     px.x / max(uResolution.x, 1.0) * 2.0 - 1.0,
     1.0 - px.y / max(uResolution.y, 1.0) * 2.0,

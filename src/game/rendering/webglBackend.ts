@@ -181,8 +181,9 @@ function supportsHalfFloatTargets(gl: WebGL2RenderingContext): boolean {
  * ACES-tonemapped grade that encodes linear->sRGB explicitly.
  *
  * The scene and bloom targets are RGBA16F when the driver exposes a
- * color-renderable half-float extension, otherwise RGBA8. `effects()` stays a
- * no-op until Task 9 so the controller's pass order is already wired.
+ * color-renderable half-float extension, otherwise RGBA8. `effects()` draws
+ * additive glows, particles, the shield rim and one-shot rings into that
+ * scene target before bloom, so the controller's pass order stays fixed.
  */
 export class WebGLBackend implements PostFXBackend {
   private gl: WebGL2RenderingContext | null = null;

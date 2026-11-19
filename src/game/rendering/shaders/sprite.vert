@@ -14,7 +14,7 @@ void main() {
   vUv = aUv;
   vColor = uColor;
   vKind = uKind;
-  vec2 px = uCenter + uShake + aPos * uSize;
+  vec2 px = uCenter + uShake + (aPos - vec2(0.5)) * uSize;
   gl_Position = vec4(
     px.x / max(uResolution.x, 1.0) * 2.0 - 1.0,
     1.0 - px.y / max(uResolution.y, 1.0) * 2.0,

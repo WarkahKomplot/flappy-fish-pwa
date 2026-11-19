@@ -4,6 +4,8 @@ import { compileShader, createProgram } from '../../src/game/rendering/glUtils';
 import { QUALITY_PROFILES, getQualityProfile } from '../../src/game/rendering/quality';
 import type { SceneSnapshot, RenderEvent } from '../../src/game/rendering/types';
 import type { GameRect } from '../../src/game/rendering/geometry';
+import spriteVertSource from '../../src/game/rendering/shaders/sprite.vert?raw';
+import particleVertSource from '../../src/game/rendering/shaders/particle.vert?raw';
 
 /**
  * A `vi.fn()`-backed WebGL2 context. jsdom has no GPU, so the backend tests
@@ -400,6 +402,24 @@ function colorMatches(draw: DrawState, rgb: readonly number[]): boolean {
   );
 }
 
+/** The shader must centre a 0..1 quad on uCenter, not anchor it top-left. */
+const CENTERED_QUAD =
+  /\(aPos\s*-\s*(?:vec2\(\s*0\.5\s*\)|0\.5)\)\s*\*\s*(?:uSize|size)/;
+const TOP_LEFT_QUAD = /aPos\s*\*\s*(?:uSize|size)/;
+
+/** CPU mirror of the centred vertex convention: center +/- size / 2. */
+function centeredBounds(
+  center: number[],
+  size: number[]
+): { left: number; right: number; top: number; bottom: number } {
+  return {
+    left: center[0] - size[0] / 2,
+    right: center[0] + size[0] / 2,
+    top: center[1] - size[1] / 2,
+    bottom: center[1] + size[1] / 2,
+  };
+}
+
 describe('WebGLBackend init failure containment', () => {
   it('returns false for a missing context', () => {
     const canvas = document.createElement('canvas');
@@ -775,11 +795,83 @@ describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
         expect(spriteAt(fx, point.x, point.y)).toBeDefined();
       }
 
-      // No lens/warp uniform reaches any effects draw.
-      expect(fx.every((draw) => draw.uniforms.uWarp === undefined)).toBe(true);
+      // Every effects sprite is a bounded local quad, never a full-stage
+      // warp or an extra composite pass.
+      for (const draw of sprites) {
+        const size = uniformPair(draw, 'uSize')!;
+        expect(size[0]).toBe(size[1]);
+        expect(size[0]).toBeGreaterThan(0);
+        expect(size[0]).toBeLessThan(rect.width / 2);
+      }
+      expect(fx.some((draw) => draw.uniforms.uBloom !== undefined)).toBe(false);
       backend.dispose();
     }
   );
+
+  it('centres sprite and particle quads on their anchors', () => {
+    // Source pin: a top-left quad (aPos * size) silently shifts every glow,
+    // ring and shield off its anchor by half its size.
+    expect(spriteVertSource).toMatch(CENTERED_QUAD);
+    expect(particleVertSource).toMatch(CENTERED_QUAD);
+    expect(spriteVertSource).not.toMatch(TOP_LEFT_QUAD);
+    expect(particleVertSource).not.toMatch(TOP_LEFT_QUAD);
+
+    const profile = QUALITY_PROFILES.high;
+    const { gl, drawStates } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeRichFxSnapshot();
+
+    backend.resize(390, 844, GAME_RECT, profile);
+    backend.beginFrame(snapshot, profile);
+    const before = drawStates.length;
+    backend.effects(snapshot, profile);
+    const fx = drawStates.slice(before);
+    const rect = gameRectFor(profile);
+
+    // A pearl glow's quad surrounds its visualY anchor, not the base pearl.y.
+    const pearl = worldToDevice(profile, snapshot, 120, 210);
+    const glow = spriteAt(fx, pearl.x, pearl.y)!;
+    const glowSize = uniformPair(glow, 'uSize')!;
+    const glowBounds = centeredBounds(uniformPair(glow, 'uCenter')!, glowSize);
+    expect(glowBounds.left).toBeLessThan(pearl.x);
+    expect(glowBounds.right).toBeGreaterThan(pearl.x);
+    expect(glowBounds.top).toBeLessThan(pearl.y);
+    expect(glowBounds.bottom).toBeGreaterThan(pearl.y);
+    expect(glowBounds.top).toBeLessThan(pearl.y - 10);
+    expect(glowBounds.bottom).toBeGreaterThan(pearl.y + 10);
+    expect(glowBounds.right - glowBounds.left).toBeCloseTo(glowSize[0], 6);
+
+    // The shield ring's local quad is centred on the fish, not down-right.
+    const fish = worldToDevice(profile, snapshot, snapshot.fish.x, snapshot.fish.y);
+    const shieldRing = spriteDraws(fx).find((draw) => {
+      const center = uniformPair(draw, 'uCenter')!;
+      return (
+        uniformNumber(draw, 'uKind') === 1 &&
+        Math.abs(center[0] - fish.x) < 0.01 &&
+        Math.abs(center[1] - fish.y) < 0.01
+      );
+    })!;
+    const shieldBounds = centeredBounds(
+      uniformPair(shieldRing, 'uCenter')!,
+      uniformPair(shieldRing, 'uSize')!
+    );
+    expect(shieldBounds.left).toBeLessThan(fish.x);
+    expect(shieldBounds.right).toBeGreaterThan(fish.x);
+    expect(shieldBounds.top).toBeLessThan(fish.y);
+    expect(shieldBounds.bottom).toBeGreaterThan(fish.y);
+    // Centring, not a top-left anchor: both edges clear the fish.
+    expect(fish.x - shieldBounds.left).toBeCloseTo(shieldBounds.right - fish.x, 6);
+    expect(fish.y - shieldBounds.top).toBeCloseTo(shieldBounds.bottom - fish.y, 6);
+    expect(shieldBounds.right - shieldBounds.left).toBeLessThan(rect.width / 2);
+
+    // Two static particle ranges, 6 vertices apiece; their vertex shader uses
+    // the same centred convention.
+    const particles = particleDraws(fx);
+    expect(particles).toHaveLength(2);
+    expect(particles.every((draw) => draw.count % 6 === 0)).toBe(true);
+
+    backend.dispose();
+  });
 
   it('maps each event type to its ring or pulse and ignores 500 ms-old events', () => {
     const profile = QUALITY_PROFILES.high;
@@ -1003,7 +1095,7 @@ describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
       const sprites = spriteDraws(draws);
 
       backend.dispose();
-      return { background, scene, composite, sprites, profile };
+      return { background, scene, composite, sprites, profile, draws };
     };
 
     const high = render('high', 0.04);
@@ -1014,10 +1106,21 @@ describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
     for (const draw of high.sprites) {
       expect(uniformPair(draw, 'uShake')).toEqual(highShake);
     }
-    // The final composite is a plain tonemap: no shake/warp, so the DOM HUD
-    // (never part of the WebGL frame) cannot shake either.
+    // Shake is one coherent world translation (background, scene and effect
+    // sprites share it). The composite is a single final present pass with
+    // unchanged exposure; the DOM HUD is never part of the WebGL frame.
     expect(high.composite.uniforms.uShake).toBeUndefined();
-    expect(high.composite.uniforms.uWarp).toBeUndefined();
+    expect(
+      high.draws.filter((draw) => draw.uniforms.uBloom !== undefined)
+    ).toHaveLength(1);
+    expect(high.draws[high.draws.length - 1]).toBe(high.composite);
+    expect(high.composite.framebuffer).toBeNull();
+    expect(uniformNumber(high.composite, 'uExposure')).toBeCloseTo(1.1, 6);
+    for (const draw of high.sprites) {
+      expect(uniformPair(draw, 'uSize')![0]).toBeLessThan(
+        gameRectFor(high.profile).width / 2
+      );
+    }
     expect(uniformPair(high.scene, 'uGameRect')).toEqual([0, 151, 780, 1386]);
 
     const medium = render('medium', 0.04);
@@ -1061,7 +1164,8 @@ describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
         exposure: uniformNumber(draw, 'uExposure')!,
         bloomStrength: uniformNumber(draw, 'uBloomStrength')!,
         bloomEnabled: uniformNumber(draw, 'uBloomEnabled')!,
-        flash: draw.uniforms.uFlash ?? draw.uniforms.uLuminance,
+        passes: drawStates.length - before,
+        framebuffer: draw.framebuffer,
       };
       backend.dispose();
       return result;
@@ -1074,7 +1178,17 @@ describe('WebGLBackend effects (glows, particles, shield, one-shots)', () => {
     expect(recent.exposure).toBeCloseTo(1.1, 6);
     expect(recent.bloomStrength).toBeCloseTo(0.55, 6);
     expect(recent.bloomEnabled).toBe(1);
-    expect(recent.flash).toBeUndefined();
+
+    // A hit only scales the bloom multiplier: exposure, bloom strength,
+    // enablement, pass count and the present target are all unchanged (no
+    // luminance flash and no extra full-screen pass).
+    const noHit = compositeFor([]);
+    expect(recent.exposure).toBe(noHit.exposure);
+    expect(recent.bloomStrength).toBe(noHit.bloomStrength);
+    expect(recent.bloomEnabled).toBe(noHit.bloomEnabled);
+    expect(recent.passes).toBe(noHit.passes);
+    expect(recent.framebuffer).toBeNull();
+    expect(noHit.framebuffer).toBeNull();
 
     // Past the one-shot window the swell is gone.
     expect(compositeFor([{ type: 'hit', x: 60, y: 300, t: 5.4 }]).hit).toBe(0);
