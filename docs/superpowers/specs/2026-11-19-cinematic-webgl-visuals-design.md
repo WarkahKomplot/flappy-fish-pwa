@@ -358,13 +358,16 @@ flashing beyond the existing 10 Hz invulnerability blink.
 | Tier | Post | Capture | Bloom | Rays/CA/Grain | Particles | Shake |
 |---|---|---|---|---|---|---|
 | High | DPR ≤2, ≤2.2 MP | 1.25–1.5 | 1/4 | on | ~180 | full |
-| Medium | DPR ≤1.5 | 1.0 | 1/8 | rays only | ~90 | reduced |
+| Medium | DPR ≤1.5 | 1.0 | 1/8 | — | ~90 | reduced (0.5×) |
 | Low (GL) | DPR 1 | 0.75 | — | — | ~40 | — |
 | Off | — | 1.0 | — | — | — | — |
 
 - **Low is a real GL tier**, not a synonym for Off: background + scene
   composite only, no bloom/rays/CA/grain, capture 0.75, postDpr 1. It keeps
   the full-bleed look on a warm phone. **Off** is the Canvas 2D fallback.
+- God rays are **High-only** (§7.3); the earlier "rays only" Medium wording in
+  this table was a typo. `QualityProfile.shake` is a boolean gate; the effect
+  scales amplitude by tier (High 1×, Medium 0.5×).
 - Selection at boot: WebGL2 present + required extensions; `hardwareConcurrency`
   and `deviceMemory` heuristics; desktop → High, mid mobile → Medium, weak →
   Low; `prefers-reduced-motion` keeps the tier but disables shake/CA/grain.

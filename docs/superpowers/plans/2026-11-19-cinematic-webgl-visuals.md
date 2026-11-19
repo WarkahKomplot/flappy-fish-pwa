@@ -714,7 +714,7 @@ git commit -m "feat(render): add bloom, ACES tonemap and cinematic grade"
   - a GPU particle pool (`profile.particleCount`) for ambient silt/bubbles and swim events;
   - a shield rim/ring at the fish (no full-screen lens warp);
   - one-shot rings from `events` younger than 500 ms: `hit` (shockwave + bloom swell), `shield-pop` (cyan ring), `best` (gold pulse), `pearl` (sparkle).
-  - camera shake only when `profile.shake`; offset the scene/background quad by 2–3 px decaying over ~120 ms. The HUD is DOM and never shakes.
+  - camera shake only when `profile.shake`; offset the scene/background quad by 2–3 px decaying over ~120 ms, scaled by tier (High 1×, Medium 0.5×). God rays are High-only. The HUD is DOM and never shakes.
 - No luminance flash; impacts use a bloom swell.
 
 - [ ] **Step 1: Implement the effects passes and particle pool**
