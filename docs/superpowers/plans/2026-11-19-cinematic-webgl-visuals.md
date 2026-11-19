@@ -718,30 +718,35 @@ git commit -m "feat(render): add WebGL2 full-bleed background and scene composit
 
 **Files:**
 - Create: `src/game/rendering/shaders/bright.frag`, `blur.frag`, `composite.frag`
-- Modify: `src/game/rendering/webglBackend.ts`
+- Modify: `src/game/rendering/webglBackend.ts`, `src/components/GameCanvas.tsx`
 - Test: controller pass flags already cover enable/disable; manual visual checks.
 
 **Interfaces:**
 - Adds FBO mip chain; `bloom(snapshot, profile)` runs bright → blur H → blur V → upsample; `composite` combines scene + bloom, applies ACES, exposure, grade, vignette, grain, CA, and encodes linear→sRGB.
 - The bright pass stores `min(color, 4.0) / 4.0` when the FBO is RGBA8; the composite multiplies bloom by 4.
 - `chromaticAberration` and `grain` are disabled by the profile; `prefers-reduced-motion` keeps them off.
+- The background palette must use the **exact sRGB transfer function** (not `pow(2.2)`) when decoding authored sRGB to linear; the two must agree with `present.frag`.
 
 - [ ] **Step 1: Implement the bloom/bright/blur shaders and FBO chain**
 
-Use half-float FBOs when `EXT_color_buffer_half_float` or `EXT_color_buffer_float` is present; otherwise RGBA8 with the 1/4 headroom. Bloom threshold ~0.8 (linear), 3 mips, 9-tap Gaussian, additive upsample.
+Use half-float FBOs when `EXT_color_buffer_half_float` or `EXT_color_buffer_float` is present; otherwise RGBA8 with the 1/4 headroom **plus a small ordered dither** in the composite/present to avoid dark-end banding (linear RGBA8 deep-water values occupy only a few codes). Replace the background's `pow(2.2)` decode with the exact sRGB transfer function. Bloom threshold ~0.8 (linear), 3 mips, 9-tap Gaussian, additive upsample.
 
 - [ ] **Step 2: Implement the composite shader**
 
 ACES fitted tonemap, exposure uniform default `1.1`, grade uniforms (defaults: teal shadows, warm highlights), vignette strength 0.25, grain 0.03, CA 0.0015, gamma/linear→sRGB encode. No luminance flash. The composite output must match the sRGB scene colours on iOS and Android (known-colour check).
 
+**First-frame scene population:** `engine.resize` clears the scene buffer, so the first GL frame after mount/resize can be background-only. Before the first `controller.render`, render one 2D frame (`engine.frame(0)` with `afterRender` temporarily unset, or equivalent) so the scene texture contains the fish/obstacles. Do this on the first frame after a resize; the idle loop then keeps it current.
+
 - [ ] **Step 3: Manual visual verification**
 
 Use the QA freeze fixture (or `?fx=high` at the start screen) at 390×844 and 448×900. Expected: pearls/shield/fish stripe bloom; background shafts/caustics visible; blacks not crushed; no washed-out gap; disabling bloom via `?fx=low` removes bloom but keeps the full-bleed background. Run `npm test`, `npx tsc --noEmit`, `npm run build`.
 
+**Shader validation:** no GLSL compiler/GPU is available in this environment, and the Task 7 "glslang" claim was not reproducible. Do not claim shader compilation. Manual GLSL review plus a device/driver compile (and `gl.getError()` after init) is a release gate; record it in the Task 12 QA notes.
+
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/game/rendering/shaders src/game/rendering/webglBackend.ts
+git add src/game/rendering/shaders src/game/rendering/webglBackend.ts src/components/GameCanvas.tsx
 git commit -m "feat(render): add bloom, ACES tonemap and cinematic grade"
 ```
 
