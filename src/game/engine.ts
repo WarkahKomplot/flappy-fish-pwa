@@ -18,7 +18,11 @@ import {
   setAudioMuted,
 } from './storage';
 import { createObstaclePair } from './entities/obstacles';
-import { createPearlForGap } from './entities/collectibles';
+import {
+  createPearlForGap,
+  getEntitySeed,
+  resolvePearlY,
+} from './entities/collectibles';
 import { renderFish } from './entities/fish';
 import { ParticleSystem } from './entities/particles';
 import type {
@@ -28,16 +32,11 @@ import type {
   GameStatus,
   SkinId,
 } from './types';
-
-function getEntitySeed(id: string | number | undefined): number {
-  if (!id) return 0;
-  if (typeof id === 'number') return id;
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash % 100);
-}
+import type {
+  RenderEvent,
+  RenderEventType,
+  SceneSnapshot,
+} from './rendering/types';
 
 export interface GameEngineOptions {
   canvas?: HTMLCanvasElement | null;
@@ -89,12 +88,15 @@ export class GameEngine {
   public ribbonCrossed: boolean = false;
   public ribbonTargetScore: number = 0;
 
+  /** One-shot render moments drained by the compositor each frame. */
+  public events: RenderEvent[] = [];
+
   private canvas: HTMLCanvasElement | null = null;
   private canvasCtx: CanvasRenderingContext2D | null = null;
   private animationFrameId: number | null = null;
   private running: boolean = false;
   private lastTime: number = 0;
-  private gameTime: number = 0;
+  public gameTime: number = 0;
   private displayWidth: number = PHYSICS_CONSTANTS.CANVAS_WIDTH;
   private displayHeight: number = PHYSICS_CONSTANTS.CANVAS_HEIGHT;
   private dpr: number = 1;
@@ -171,6 +173,7 @@ export class GameEngine {
     this.isNewBest = false;
     this.highScore = getHighScore();
     this.gameTime = 0;
+    this.events = [];
 
     this.fish.x = 80;
     this.fish.y = 300;
@@ -355,6 +358,7 @@ export class GameEngine {
         this.fish.invulnerableTime = absorb.invulnerableDuration;
         this.soundEffects.playShieldPop();
         this.particles.emitShieldPop(this.fish.x, this.fish.y);
+        this.pushEvent('shield-pop', this.fish.x, this.fish.y);
         applySwimImpulse(this.fish);
         if (this.onComboChange) {
           this.onComboChange(0, false);
@@ -372,6 +376,7 @@ export class GameEngine {
         this.ribbonCrossed = true;
         this.soundEffects.playPersonalBest();
         this.particles.emitConfetti(this.fish.x, this.fish.y);
+        this.pushEvent('best', this.fish.x, this.fish.y);
       }
     }
 
@@ -385,9 +390,11 @@ export class GameEngine {
         obs.pearl.x -= PHYSICS_CONSTANTS.HORIZONTAL_SPEED * dt;
 
         if (!obs.pearl.collected && !obs.pearl.missed) {
-          const seed = getEntitySeed(obs.id);
-          const bobY = Math.sin(this.gameTime * 3.5 + seed) * 4;
-          const pearlY = obs.pearl.y + bobY;
+          const pearlY = resolvePearlY(
+            this.gameTime,
+            getEntitySeed(obs.id),
+            obs.pearl.y
+          );
           const dx = this.fish.x - obs.pearl.x;
           const dy = this.fish.y - pearlY;
           const distSq = dx * dx + dy * dy;
@@ -398,10 +405,12 @@ export class GameEngine {
             obs.pearl.collected = true;
             this.runPearls += 1;
             this.particles.emitPearlCollect(obs.pearl.x, pearlY);
+            this.pushEvent('pearl', obs.pearl.x, pearlY);
             const result = this.comboManager.onPearlCollected();
 
             if (result.shieldActivated) {
               this.soundEffects.playShieldActivate();
+              this.pushEvent('shield-activate', this.fish.x, this.fish.y);
             } else {
               this.soundEffects.playPearlChime(result.combo - 1);
             }
@@ -438,6 +447,7 @@ export class GameEngine {
             this.fish.invulnerableTime = absorb.invulnerableDuration;
             this.soundEffects.playShieldPop();
             this.particles.emitShieldPop(this.fish.x, this.fish.y);
+            this.pushEvent('shield-pop', this.fish.x, this.fish.y);
             if (this.onComboChange) {
               this.onComboChange(0, false);
             }
@@ -477,6 +487,7 @@ export class GameEngine {
     this.status = 'gameover';
     this.fish.isDead = true;
     this.soundEffects.playHit();
+    this.pushEvent('hit', this.fish.x, this.fish.y);
 
     // Capture the comparison before saveHighScore() mutates the stored record,
     // otherwise tying the old best would be reported as "NEW BEST!".
@@ -494,6 +505,63 @@ export class GameEngine {
     if (this.onGameOver) {
       this.onGameOver(this.score, this.highScore, this.runPearls, isNewBest);
     }
+  }
+
+  /**
+   * Pushes a one-shot render event stamped with the current game time.
+   */
+  private pushEvent(type: RenderEventType, x: number, y: number): void {
+    this.events.push({ type, x, y, t: this.gameTime });
+  }
+
+  /**
+   * Builds the read-only per-frame contract consumed by the WebGL compositor.
+   * Event expiry is applied here and written back so the queue cannot grow.
+   */
+  public getSceneSnapshot(): SceneSnapshot {
+    this.events = this.events.filter((event) => event.t >= this.gameTime - 1);
+
+    return {
+      time: this.gameTime,
+      status: this.status,
+      world: {
+        width: PHYSICS_CONSTANTS.CANVAS_WIDTH,
+        height: PHYSICS_CONSTANTS.CANVAS_HEIGHT,
+      },
+      fish: { ...this.fish },
+      obstacles: this.obstacles.map((obs) => ({
+        x: obs.x,
+        width: obs.width,
+        topHeight: obs.topHeight,
+        bottomY: obs.bottomY,
+        ...(obs.pearl
+          ? {
+              pearl: {
+                x: obs.pearl.x,
+                y: obs.pearl.y,
+                visualY: resolvePearlY(
+                  this.gameTime,
+                  getEntitySeed(obs.id),
+                  obs.pearl.y
+                ),
+                radius: obs.pearl.radius,
+                collected: obs.pearl.collected,
+                missed: Boolean(obs.pearl.missed),
+              },
+            }
+          : {}),
+      })),
+      shield: {
+        active: this.comboManager.hasShield,
+        activeTime: this.comboManager.shieldActiveTime,
+      },
+      ribbon: {
+        x: this.ribbonX,
+        target: this.ribbonTargetScore,
+        crossed: this.ribbonCrossed,
+      },
+      events: this.events,
+    };
   }
 
   /**
@@ -721,9 +789,8 @@ export class GameEngine {
       if (!obs.pearl || obs.pearl.collected) continue;
 
       const seed = getEntitySeed(obs.id);
-      const bobY = Math.sin(this.gameTime * 3.5 + seed) * 4;
       const px = obs.pearl.x;
-      const py = obs.pearl.y + bobY;
+      const py = resolvePearlY(this.gameTime, seed, obs.pearl.y);
       const r = obs.pearl.radius;
 
       if (px < -20 || px > PHYSICS_CONSTANTS.CANVAS_WIDTH + 20) continue;

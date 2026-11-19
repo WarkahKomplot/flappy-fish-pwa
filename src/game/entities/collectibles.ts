@@ -8,6 +8,28 @@ export function resetPearlIdCounter(): void {
 }
 
 /**
+ * Stable per-entity seed derived from an obstacle id, used to offset the
+ * pearl's sinusoidal bob so neighbouring pearls do not bob in lockstep.
+ */
+export function getEntitySeed(id: string | number | undefined): number {
+  if (!id) return 0;
+  if (typeof id === 'number') return id;
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash % 100);
+}
+
+/**
+ * Single shared bob formula for both the Canvas 2D renderer and the scene
+ * snapshot, so the drawn pearl and the compositor can never drift apart.
+ */
+export function resolvePearlY(time: number, seed: number, baseY: number): number {
+  return baseY + Math.sin(time * 3.5 + seed) * 4;
+}
+
+/**
  * Creates a luminous pearl located at the vertical and horizontal center of an obstacle gap
  * based on ~60% spawn probability.
  *
