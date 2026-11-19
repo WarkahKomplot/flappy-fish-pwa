@@ -659,13 +659,15 @@ git commit -m "feat(canvas): add two-canvas structure and Canvas 2D fallback"
 
 **Files:**
 - Create: `src/game/rendering/glUtils.ts`, `src/game/rendering/webglBackend.ts`, `src/game/rendering/shaders/background.vert`, `background.frag`, `scene.vert`, `scene.frag`
-- Modify: `src/components/GameCanvas.tsx` (use `new WebGLBackend()` as the default factory)
-- Test: `tests/rendering/webglBackend.test.ts`; manual freeze check
+- Modify: `src/components/GameCanvas.tsx` (use `new WebGLBackend()` as the default factory; first frame + idle loop)
+- Modify: `src/game/engine.ts` (`startLoop()`)
+- Test: `tests/rendering/webglBackend.test.ts`, `tests/rendering/gameCanvas.test.tsx`, `tests/rendering/engineFrame.test.ts`; manual freeze check
 
 **Interfaces:**
 - `WebGLBackend implements PostFXBackend`; `init` returns `false` (never throws) when `getContext('webgl2')` is null, when `typeof gl.createShader !== 'function'`, or when program creation throws.
 - Shader uniforms: background `uResolution`, `uTime`, `uGameRect`, `uWorld`; scene `uScene`, `uGameRect`, `uSceneSize`.
 - Scene texture: `SRGB8_ALPHA8`, `UNPACK_PREMULTIPLY_ALPHA_WEBGL = true`; blend `ONE / ONE_MINUS_SRC_ALPHA`.
+- `GameEngine.startLoop(): void` starts the rAF loop **without changing status** (idempotent; `start()` reuses it; `destroy()` stops it).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -683,6 +685,11 @@ it('returns false for a context without shader support', () => {
 });
 ```
 
+Also add:
+- `gameCanvas.test.tsx`: a **non-null** backend whose `init` returns `false` → scene visible, FX hidden, `onEffectiveTierChange` ends `off`.
+- `gameCanvas.test.tsx`: a measured **1200×2000** stage → the scene canvas buffer (`width * height`) is ≤ `1_500_000`, proving `computeCaptureSize` is consumed.
+- `engineFrame.test.ts`: `startLoop()` is idempotent (spying `requestAnimationFrame` sees one schedule for two calls) and `destroy()` cancels it.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run tests/rendering/webglBackend.test.ts`
@@ -692,14 +699,16 @@ Expected: FAIL — module not found.
 
 `glUtils`: `compileShader(gl, type, source)`, `createProgram(gl, vs, fs)`, `createQuad(gl)`, `createTexture(gl)`, `createFbo(gl, w, h, internalFormat)`, `uploadCanvas(gl, texture, canvas)`. `webglBackend.init`: get context with `{ alpha:false, antialias:false, depth:false, stencil:false, powerPreference:'high-performance' }`, feature-detect, compile the background and scene programs, create a full-screen quad, return false on any throw. `resize` sets the canvas buffer from `stageW/H × profile.postDpr` capped by `maxPostPixels`, viewport, and recreates the scene FBO. `background` draws the full-screen triangle with the world mapping uniforms. `scene` uploads the scene canvas and draws a quad into `uGameRect` (clip-space conversion: `x = (gx/stageW)*2-1`, etc.), alpha-blended; `beginFrame` binds the scene FBO and clears; `composite` blits/draws the scene FBO to the default framebuffer (no bloom yet); `effects`/`bloom` are no-ops until Task 8; `endFrame` is a no-op. `dispose` deletes programs/textures/FBOs and is **idempotent** (safe on a partially-initialised backend and safe to call twice).
 
+**First frame + idle loop (do not skip this):** before `GameCanvas` hides the scene canvas, run one `controller.render(engine.getSceneSnapshot())` inside try/catch; only hide the scene after it succeeds. Then call `engine.startLoop()` when GL is active, so the start screen shows the animated background/fish before the first tap (the rAF previously started only on tap). `startLoop` is idempotent and `start()` reuses it. Do **not** start the idle loop in the 2D fallback; preserve today's start-screen behavior. If the first render throws, fall back to 2D.
+
 - [ ] **Step 4: Manual visual verification**
 
-Run `npm run dev`; open `http://localhost:3000/?fx=high` in a browser with WebGL2. Expected: full-bleed procedural background edge-to-edge; the 9:16 game scene composited in the center with no seam at the top/bottom edges; no console errors; tapping still flaps. At 390×844 DevTools, the game rect origin must be 75.5 px (inspect the scene canvas `getBoundingClientRect().top`). Run `npm test` and `npx tsc --noEmit`; both pass.
+Run `npm run dev`; open `http://localhost:3000/?fx=high` in a browser with WebGL2. Expected: full-bleed procedural background edge-to-edge; the 9:16 game scene composited in the center with no seam at the top/bottom edges; no console errors; the **start screen itself** shows the animated background and idle fish (the idle loop), and tapping still flaps. At 390×844 DevTools, the game rect origin must be 75.5 px (inspect the scene canvas `getBoundingClientRect().top`). Run `npm test` and `npx tsc --noEmit`; both pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/game/rendering/glUtils.ts src/game/rendering/webglBackend.ts src/game/rendering/shaders src/components/GameCanvas.tsx tests/rendering/webglBackend.test.ts
+git add src/game/rendering/glUtils.ts src/game/rendering/webglBackend.ts src/game/rendering/shaders src/components/GameCanvas.tsx src/game/engine.ts tests/rendering/webglBackend.test.ts tests/rendering/gameCanvas.test.tsx tests/rendering/engineFrame.test.ts
 git commit -m "feat(render): add WebGL2 full-bleed background and scene composite"
 ```
 
@@ -827,7 +836,7 @@ Expected: FAIL — components missing.
 
 - [ ] **Step 3: Implement the panel and wiring**
 
-`FxPanel` is a z-50 modal with a `role="dialog"`, five `role="radio"` buttons (`data-testid="fx-option-<value>"`), `aria-checked`, an effective-tier line (`data-testid="fx-effective-tier"`), Escape/backdrop close and focus return. StartScreen adds `data-testid="fx-open-button"` with `stopPropagation`; HUD adds the same when paused. `App` loads/saves via `fxSettings`, renders the panel, passes `onOpenFx` to both, and passes `fxPreference`/`onEffectiveTierChange` to `GameCanvas`. `GameCanvas` calls `controller.setPreference(pref, autoTier)` **only when the controller initialised successfully**, inside a try/catch; if the switch fails, it calls `onEffectiveTierChange('off')` and shows the 2D fallback. Selecting a higher tier after a failed init must not make the UI report a working GL tier; the panel then displays Off.
+`FxPanel` is a z-50 modal with a `role="dialog"`, five `role="radio"` buttons (`data-testid="fx-option-<value>"`), `aria-checked`, an effective-tier line (`data-testid="fx-effective-tier"`), Escape/backdrop close and focus return. StartScreen adds `data-testid="fx-open-button"` with `stopPropagation`; HUD adds the same when paused. `App` loads/saves via `fxSettings`, renders the panel, passes `onOpenFx` to both, and passes `fxPreference`/`onEffectiveTierChange` to `GameCanvas`. `GameCanvas` applies preference changes through one `applyPreference(pref)` path: if a controller is alive, call `controller.setPreference(pref, autoTier)` in try/catch, then re-measure and call `controller.resize` so an Off→High switch gets a viewport/FBO. If the controller is null/disposed (failed init or a previous render throw) and the new preference is a GL tier, create a fresh controller/backend via `backendFactory` and re-run init → setPreference → resize → first frame; if any step throws or init fails, call `onEffectiveTierChange('off')` and show the 2D fallback. Selecting a higher tier after a failed init must not report a working GL tier until a fresh init succeeds; Off keeps the controller alive but shows 2D. After any tier change, re-measure so the resize is not stale.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
