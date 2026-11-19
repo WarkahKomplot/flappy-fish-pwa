@@ -36,6 +36,15 @@ export const HUD: React.FC<HUDProps> = ({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-4 select-none">
+      {/* Static readability scrims behind the score/combo. CSS-only and
+          non-interactive; the 44 px controls keep their hit areas. */}
+      {isPlayingOrPaused && (
+        <>
+          <div aria-hidden="true" className="hud-scrim hud-scrim-top" />
+          <div aria-hidden="true" className="hud-scrim hud-scrim-bottom" />
+        </>
+      )}
+
       {/* Top Bar: Controls & Current Score */}
       <div className="flex items-start justify-between">
         {/* Left Control Buttons: Audio Mute & Pause */}

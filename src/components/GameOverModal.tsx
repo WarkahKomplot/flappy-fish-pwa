@@ -7,6 +7,12 @@ export interface GameOverModalProps {
   lifetimePearls: number;
   onRetry: () => void;
   isNewHighScore?: boolean;
+  /**
+   * True while the WebGL compositor owns the stage. A backdrop-filter blur over
+   * a continuously animating canvas re-blurs the full stage every frame, so the
+   * GL path uses a static dark scrim and panel instead.
+   */
+  isFxActive?: boolean;
 }
 
 /**
@@ -26,6 +32,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   // time this renders, highScore already includes the current run, so a tie
   // was celebrated as a new record.
   isNewHighScore = false,
+  isFxActive = false,
 }) => {
   // Listen for Space/Enter key for instant desktop keyboard retry
   useEffect(() => {
@@ -43,10 +50,15 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
     <div
       data-testid="game-over-modal"
       onClick={onRetry}
-      className="pointer-events-auto absolute inset-0 z-40 flex flex-col items-center justify-center bg-slate-950/80 p-6 backdrop-blur-md select-none cursor-pointer transition-opacity duration-150 animate-fadeIn"
+      className={`pointer-events-auto absolute inset-0 z-40 flex flex-col items-center justify-center p-6 select-none cursor-pointer transition-opacity duration-150 animate-fadeIn ${
+        isFxActive ? 'bg-slate-950/90' : 'bg-slate-950/80 backdrop-blur-md'
+      }`}
     >
       <div
-        className="w-full max-w-xs rounded-2xl border border-slate-700/80 bg-slate-900/90 p-6 shadow-2xl backdrop-blur-xl text-center"
+        data-testid="game-over-panel"
+        className={`w-full max-w-xs rounded-2xl border border-slate-700/80 bg-slate-900/90 p-6 shadow-2xl text-center ${
+          isFxActive ? '' : 'backdrop-blur-xl'
+        }`}
         onClick={() => {
           // Allow tapping anywhere on modal box to retry as well
           onRetry();

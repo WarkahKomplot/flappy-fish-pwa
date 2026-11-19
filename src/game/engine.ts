@@ -98,6 +98,12 @@ export class GameEngine {
   public backgroundVisible: boolean = true;
 
   /**
+   * When true the WebGL path renders the personal-best badge as a DOM label,
+   * so the Canvas 2D renderer keeps the dashed line but skips the badge.
+   */
+  public ribbonLabelDom: boolean = false;
+
+  /**
    * Optional post-render hook for the WebGL compositor. It is cleared if the
    * renderer throws so the game falls back to plain Canvas 2D and keeps going.
    */
@@ -911,6 +917,12 @@ export class GameEngine {
 
     ctx.setLineDash([]);
     ctx.shadowBlur = 0;
+
+    // In GL mode the DOM label owns the badge; keep only the in-water line.
+    if (this.ribbonLabelDom) {
+      ctx.restore();
+      return;
+    }
 
     // Floating banner badge
     const badgeY = 110;

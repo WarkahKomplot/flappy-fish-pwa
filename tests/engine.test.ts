@@ -434,6 +434,22 @@ describe('GameEngine 60fps Canvas Orchestrator', () => {
 
       pbEngine.destroy();
     });
+
+    it('keeps the dashed line but skips the badge text when the DOM label owns it', () => {
+      storage.saveHighScore(3);
+      const pbEngine = new GameEngine({ soundEffects: mockSounds });
+      pbEngine.ribbonTargetScore = 3;
+      pbEngine.ribbonX = 100;
+      pbEngine.ribbonLabelDom = true;
+
+      const ctx = createMockContext();
+      pbEngine.render(ctx, 360, 640, 1);
+
+      expect(ctx.setLineDash).toHaveBeenCalledWith([8, 6]);
+      expect(ctx.fillText).not.toHaveBeenCalled();
+
+      pbEngine.destroy();
+    });
   });
 
   describe('Retina / High-DPI Canvas DPR Scaling (Review Focus 3)', () => {

@@ -211,6 +211,51 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     );
   });
 
+  it('owns the ribbon label in the DOM only while GL is active', () => {
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => backend} />
+    );
+
+    expect(engine.ribbonLabelDom).toBe(true);
+
+    engine.highScore = 3;
+    engine.ribbonTargetScore = 3;
+    engine.ribbonX = 100;
+
+    act(() => {
+      engine.frame(1);
+    });
+
+    const label = screen.getByTestId('ribbon-label');
+    expect(label.textContent).toContain('BEST: 3');
+    expect(label.style.opacity).toBe('1');
+    // worldToStage(100, 110, {x:0,y:75.5,w:390,h:693})
+    expect(parseFloat(label.style.left)).toBeCloseTo(108.333, 2);
+    expect(parseFloat(label.style.top)).toBeCloseTo(194.609, 2);
+  });
+
+  it('hides the DOM ribbon label and restores the Canvas 2D badge on fallback', () => {
+    mockMeasuredStage();
+
+    const throwing = fakeBackendThatThrowsOnRender();
+    render(
+      <GameCanvas engine={engine} fxPreference="high" backendFactory={() => throwing} />
+    );
+
+    expect(engine.ribbonLabelDom).toBe(true);
+    expect(screen.getByTestId('ribbon-label')).toBeDefined();
+
+    act(() => {
+      engine.frame(1);
+    });
+
+    expect(engine.ribbonLabelDom).toBe(false);
+    expect(screen.getByTestId('ribbon-label').style.opacity).toBe('0');
+  });
+
   it('keeps the 2D scene when the preference is Off even with a usable backend', () => {
     mockMeasuredStage();
 

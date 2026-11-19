@@ -270,6 +270,44 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
 
       expect(screen.getByText(/NEW BEST/i)).toBeDefined();
     });
+
+    it('uses a static dark panel without any backdrop blur while FX is active', () => {
+      const { rerender } = render(
+        <GameOverModal
+          score={18}
+          highScore={25}
+          runPearls={4}
+          lifetimePearls={80}
+          isFxActive
+          onRetry={vi.fn()}
+        />
+      );
+
+      const overlay = screen.getByTestId('game-over-modal');
+      expect(overlay.className).toContain('bg-slate-950/90');
+      expect(overlay.className).not.toContain('backdrop-blur');
+
+      const panel = screen.getByTestId('game-over-panel');
+      expect(panel.className).not.toContain('backdrop-blur');
+
+      // With FX off (the Canvas 2D path) the original blurred backdrop stays.
+      rerender(
+        <GameOverModal
+          score={18}
+          highScore={25}
+          runPearls={4}
+          lifetimePearls={80}
+          isFxActive={false}
+          onRetry={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId('game-over-modal').className).toContain(
+        'backdrop-blur-md'
+      );
+      expect(screen.getByTestId('game-over-panel').className).toContain(
+        'backdrop-blur-xl'
+      );
+    });
   });
 
   describe('SkinSelector Component', () => {
@@ -441,6 +479,25 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
       expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe('true');
       expect(screen.getByTestId('fx-option-high').getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByTestId('fx-effective-tier').textContent).toContain('Off');
+      expect(screen.getByTestId('fx-failure-message').textContent).toContain(
+        'switched to Off'
+      );
+    });
+
+    it('reverts a stored GL preference that cannot run on load and explains it', () => {
+      localStorage.setItem('flappy_fish_fx', 'high');
+
+      render(<App />);
+
+      // The persisted High could not initialise (no WebGL2 in jsdom), so the
+      // stored choice is corrected to Off instead of retrying on every reload.
+      expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe(
+        'true'
+      );
       expect(screen.getByTestId('fx-effective-tier').textContent).toContain('Off');
       expect(screen.getByTestId('fx-failure-message').textContent).toContain(
         'switched to Off'

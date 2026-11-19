@@ -246,6 +246,7 @@ export function App() {
             runPearls={runPearls}
             lifetimePearls={lifetimePearls}
             isNewHighScore={isNewBest}
+            isFxActive={effectiveTier !== 'off'}
             onRetry={handleRetry}
           />
         )}

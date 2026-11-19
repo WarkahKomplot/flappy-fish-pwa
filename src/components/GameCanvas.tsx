@@ -6,11 +6,17 @@ import { selectQuality } from '../game/rendering/quality';
 import {
   computeCaptureSize,
   computeGameRect,
+  worldToStage,
   type GameRect,
 } from '../game/rendering/geometry';
 import type { PostFXBackend } from '../game/rendering/backend';
 import { WebGLBackend } from '../game/rendering/webglBackend';
-import type { FxPreference, QualityTier } from '../game/rendering/types';
+import type {
+  FxPreference,
+  QualityTier,
+  SceneSnapshot,
+} from '../game/rendering/types';
+import { RibbonLabel } from './RibbonLabel';
 
 const WORLD_WIDTH = PHYSICS_CONSTANTS.CANVAS_WIDTH;
 const WORLD_HEIGHT = PHYSICS_CONSTANTS.CANVAS_HEIGHT;
@@ -106,6 +112,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneCanvasRef = useRef<HTMLCanvasElement>(null);
   const fxCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ribbonLabelRef = useRef<HTMLDivElement>(null);
   const [glActive, setGlActive] = useState(false);
 
   // Latest-prop refs: the mount-only effect reads these once, and a later
@@ -163,6 +170,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     let glVisible = false;
     let disposed = false;
     let hasApplied = false;
+    // The measured stage is cached for the DOM ribbon label so afterRender can
+    // map world -> stage without reading layout every frame.
+    let currentGameRect: GameRect | null = null;
+    let currentStageWidth = 0;
 
     const reducedMotion = prefersReducedMotion();
     // Hardware heuristics for the Auto option. `webgl2` is asserted because
@@ -186,6 +197,38 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       sceneCanvas.style.transform = `translate3d(${gameRect.x}px, ${gameRect.y}px, 0)`;
     };
 
+    /**
+     * Positions the DOM ribbon badge from the same fractional game rect the GL
+     * compositor uses. Called from afterRender (never React state) so a moving
+     * ribbon does not re-render the stage every frame.
+     */
+    const updateRibbonLabel = (snapshot: SceneSnapshot) => {
+      const label = ribbonLabelRef.current;
+      if (!label || !currentGameRect) {
+        return;
+      }
+
+      const position = worldToStage(snapshot.ribbon.x, 110, currentGameRect);
+      const visible =
+        snapshot.ribbon.target > 0 &&
+        position.x >= 0 &&
+        position.x <= currentStageWidth;
+
+      label.style.left = `${position.x}px`;
+      label.style.top = `${position.y}px`;
+      label.style.opacity = visible ? '1' : '0';
+      label.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      label.textContent = `BEST: ${snapshot.ribbon.target}`;
+    };
+
+    const hideRibbonLabel = () => {
+      const label = ribbonLabelRef.current;
+      if (label) {
+        label.style.opacity = '0';
+        label.setAttribute('aria-hidden', 'true');
+      }
+    };
+
     const sizeFallback = () => {
       const rect = container.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
@@ -202,6 +245,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       glVisible = false;
       engine.afterRender = undefined;
       engine.backgroundVisible = true;
+      // The Canvas 2D renderer draws the badge again, so the DOM label must
+      // never duplicate or replace it in fallback/Off mode.
+      engine.ribbonLabelDom = false;
+      hideRibbonLabel();
       if (!disposed) {
         setGlActive(false);
       }
@@ -230,6 +277,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const rect = container.getBoundingClientRect();
       const stageW = rect.width;
       const stageH = rect.height;
+      currentGameRect = null;
+      currentStageWidth = 0;
 
       if (!(stageW > 0 && stageH > 0)) {
         // Unmeasured: skip GL resize/rendering and keep the 2D fallback at the
@@ -242,6 +291,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       const gameRect = computeGameRect(stageW, stageH);
+      currentGameRect = gameRect;
+      currentStageWidth = stageW;
       positionScene(gameRect);
 
       if (!controller || !available) {
@@ -294,20 +345,27 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       // Draw one GL frame *before* hiding the 2D scene. If the GPU path cannot
       // render, the user never sees a black/frozen stage and we fall back
       // while the populated Canvas 2D result is still on screen.
+      const firstFrameSnapshot = engine.getSceneSnapshot();
       try {
-        controller.render(engine.getSceneSnapshot());
+        controller.render(firstFrameSnapshot);
       } catch {
         enterFallback();
         return;
       }
 
       glVisible = true;
+      // GL now owns the badge: the next Canvas 2D capture keeps only the
+      // dashed line and the DOM label supplies the text.
+      engine.ribbonLabelDom = true;
+      updateRibbonLabel(firstFrameSnapshot);
       engine.afterRender = (snapshot) => {
         try {
           controller?.render(snapshot);
         } catch {
           enterFallback();
+          return;
         }
+        updateRibbonLabel(snapshot);
       };
       if (!disposed) {
         setGlActive(true);
@@ -453,6 +511,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       available = false;
       engine.afterRender = undefined;
       engine.backgroundVisible = true;
+      engine.ribbonLabelDom = false;
 
       if (controller) {
         try {
@@ -555,6 +614,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 z-10 block h-full w-full"
         style={{ display: glActive ? 'block' : 'none' }}
+      />
+
+      {/* Personal-best badge for the GL path; GameCanvas positions it via a
+          ref in afterRender and hides it whenever the 2D fallback owns it. */}
+      <RibbonLabel
+        ref={ribbonLabelRef}
+        x={0}
+        y={0}
+        target={0}
+        visible={false}
       />
     </div>
   );

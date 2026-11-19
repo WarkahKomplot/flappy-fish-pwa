@@ -54,11 +54,18 @@ describe('quality model', () => {
     ).toBe('low');
   });
 
-  it('disables motion-sensitive effects without changing tier', () => {
-    const p = getQualityProfile('high', true);
-    expect(p?.shake).toBe(false);
-    expect(p?.chromaticAberration).toBe(false);
-    expect(p?.grain).toBe(false);
+  it('disables motion-sensitive effects on every GL tier without changing tier', () => {
+    for (const tier of ['high', 'medium', 'low'] as const) {
+      const profile = getQualityProfile(tier, true);
+      expect(profile?.tier).toBe(tier);
+      expect(profile?.shake).toBe(false);
+      expect(profile?.chromaticAberration).toBe(false);
+      expect(profile?.grain).toBe(false);
+    }
+
+    // Reduced motion removes effects, not the playable tier or its budget.
+    expect(getQualityProfile('low', true)?.captureDpr).toBe(0.75);
+    expect(getQualityProfile('low', true)?.particleCount).toBe(40);
     expect(getQualityProfile('off', false)).toBeNull();
   });
 
