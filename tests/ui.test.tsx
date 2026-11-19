@@ -11,7 +11,7 @@ import { isAudioMuted } from '../src/game/storage';
 
 describe('Flappy Fish UI Overlays & HUD Tests', () => {
   beforeAll(() => {
-    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
+    const ctx2d = {
       save: vi.fn(),
       restore: vi.fn(),
       scale: vi.fn(),
@@ -24,7 +24,13 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       stroke: vi.fn(),
       moveTo: vi.fn(),
       lineTo: vi.fn(),
-    });
+    };
+    // A `webgl2` probe must fail cleanly: the real backend does not exist
+    // until Task 7, and returning a 2D-shaped object for every context type
+    // would make the two-canvas fallback look usable when it is not.
+    HTMLCanvasElement.prototype.getContext = vi.fn((type: string) =>
+      type === '2d' ? ctx2d : null
+    ) as unknown as typeof HTMLCanvasElement.prototype.getContext;
   });
   beforeEach(() => {
     localStorage.clear();

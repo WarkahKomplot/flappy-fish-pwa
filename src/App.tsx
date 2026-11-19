@@ -12,6 +12,12 @@ import {
   setActiveSkin,
   isAudioMuted,
 } from './game/storage';
+import {
+  loadFxPreference,
+  parseFxOverride,
+  resolveFxPreference,
+} from './game/rendering/fxSettings';
+import type { FxPreference } from './game/rendering/types';
 import type { GameStatus, SkinId } from './game/types';
 
 /**
@@ -37,6 +43,16 @@ export function App() {
   const [activeSkin, setActiveSkinState] = useState<SkinId>(() => getActiveSkin());
   const [isMuted, setIsMutedState] = useState<boolean>(() => isAudioMuted());
   const [isSkinModalOpen, setIsSkinModalOpen] = useState<boolean>(false);
+  // URL `?fx=` wins for this session, then the persisted choice, then Auto.
+  // Task 10 adds the panel that changes this at runtime.
+  const [fxPreference] = useState<FxPreference>(() =>
+    resolveFxPreference(
+      parseFxOverride(
+        typeof window !== 'undefined' ? window.location.search : ''
+      ),
+      loadFxPreference()
+    )
+  );
 
   // Singleton GameEngine reference
   const engineRef = useRef<GameEngine | null>(null);
@@ -132,8 +148,8 @@ export function App() {
         className="relative h-full w-full max-w-md overflow-hidden bg-slate-900 shadow-2xl flex flex-col"
         style={{ touchAction: 'none' }}
       >
-        {/* 60fps Canvas 2D Engine Viewport */}
-        <GameCanvas engine={engine} onTap={handleTap} />
+        {/* 60fps Canvas 2D Engine Viewport (with the WebGL compositor canvas) */}
+        <GameCanvas engine={engine} onTap={handleTap} fxPreference={fxPreference} />
 
         {/* In-Game HUD: Score, Pearl Combo, Shield, Pause, Mute */}
         <HUD
