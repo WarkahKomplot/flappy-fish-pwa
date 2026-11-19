@@ -43,9 +43,18 @@ float fbmNoise(vec2 p) {
   return value;
 }
 
+vec3 srgbToLinear(vec3 c) {
+  // Exact sRGB transfer function, the inverse of composite.frag's
+  // linearToSrgb. A pow(c, 2.2) fit mismatches the composite output on the
+  // known-colour check (especially in the deep-water shadows).
+  vec3 low = c / 12.92;
+  vec3 high = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(low, high, step(vec3(0.04045), c));
+}
+
 vec3 toLinear(vec3 c) {
-  // Palette is authored in sRGB; the compositor/present pair works in linear.
-  return pow(c, vec3(2.2));
+  // Palette is authored in sRGB; the compositor works in linear light.
+  return srgbToLinear(clamp(c, 0.0, 1.0));
 }
 
 // Caustic-ish interference bands, warped by noise. Evaluated in world space.

@@ -234,9 +234,29 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         return;
       }
 
-      // Draw one frame *before* hiding the 2D scene. If the GPU path cannot
+      // GL owns the full-bleed background from the first composited frame, so
+      // the 2D scene must be drawn without its own opaque background.
+      engine.backgroundVisible = false;
+
+      // engine.resize clears the 2D backing store. Populate it once before the
+      // first controller.render or the first GL frame is background-only. This
+      // is the render half of engine.frame(0) without the update tick, so a
+      // resize can never advance gameplay (a zero-dt update still runs
+      // collision checks and could collect a pearl).
+      try {
+        const sceneCtx = sceneCanvas.getContext('2d');
+        if (!sceneCtx) {
+          throw new Error('Scene canvas has no 2D context');
+        }
+        engine.render(sceneCtx, capture.width, capture.height, 1);
+      } catch {
+        enterFallback();
+        return;
+      }
+
+      // Draw one GL frame *before* hiding the 2D scene. If the GPU path cannot
       // render, the user never sees a black/frozen stage and we fall back
-      // while the Canvas 2D result is still on screen.
+      // while the populated Canvas 2D result is still on screen.
       try {
         controller.render(engine.getSceneSnapshot());
       } catch {
@@ -245,7 +265,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       glVisible = true;
-      engine.backgroundVisible = false;
       engine.afterRender = (snapshot) => {
         try {
           controller?.render(snapshot);

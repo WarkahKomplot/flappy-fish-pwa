@@ -131,13 +131,15 @@ export function createTexture(gl: WebGL2RenderingContext): WebGLTexture {
 
 /**
  * Colour-only render target. The scene pass composites into this in linear
- * light; the present pass encodes to sRGB.
+ * light; the composite encodes to sRGB. `type` defaults to UNSIGNED_BYTE;
+ * pass HALF_FLOAT together with RGBA16F for the half-float path.
  */
 export function createFbo(
   gl: WebGL2RenderingContext,
   width: number,
   height: number,
-  internalFormat: number
+  internalFormat: number,
+  type: number = gl.UNSIGNED_BYTE
 ): Framebuffer {
   const texture = createTexture(gl);
   const framebuffer = gl.createFramebuffer();
@@ -156,7 +158,7 @@ export function createFbo(
     height,
     0,
     gl.RGBA,
-    gl.UNSIGNED_BYTE,
+    type,
     null
   );
   gl.bindTexture(gl.TEXTURE_2D, null);
