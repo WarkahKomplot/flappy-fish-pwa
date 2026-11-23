@@ -141,16 +141,20 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
   });
 
-  it('routes stage taps to the engine', () => {
+  it('routes stage taps to the single onTap dispatch', () => {
     const spy = vi.spyOn(engine, 'handleInput');
+    const onTap = vi.fn();
 
-    render(<GameCanvas engine={engine} backendFactory={() => null} />);
+    render(
+      <GameCanvas engine={engine} onTap={onTap} backendFactory={() => null} />
+    );
 
     fireEvent.pointerDown(screen.getByTestId('game-canvas'), {
       pointerType: 'mouse',
     });
 
-    expect(spy).toHaveBeenCalled();
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('reveals the 2D scene if the GL frame throws', () => {
@@ -179,6 +183,82 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
     expect(engine.backgroundVisible).toBe(true);
     expect(engine.afterRender).toBeUndefined();
+    expect(onTier).toHaveBeenLastCalledWith('off');
+  });
+
+  it('repaints the scene frame so the fallback never shows a blank stage', () => {
+    mockMeasuredStage();
+
+    const throwing = fakeBackendThatThrowsOnRender();
+    render(<GameCanvas engine={engine} backendFactory={() => throwing} />);
+
+    const renderSpy = vi.spyOn(engine, 'render');
+    const resizeSpy = vi.spyOn(engine, 'resize');
+    renderSpy.mockClear();
+    resizeSpy.mockClear();
+
+    act(() => {
+      engine.frame(1);
+    });
+
+    // engine.resize() clears the canvas backing store; the fallback must
+    // repaint afterwards or the player sees a blank stage until the next rAF.
+    const lastResize = Math.max(0, ...resizeSpy.mock.invocationCallOrder);
+    const lastRender = Math.max(0, ...renderSpy.mock.invocationCallOrder);
+    expect(resizeSpy).toHaveBeenCalled();
+    expect(lastRender).toBeGreaterThan(lastResize);
+  });
+
+  it('falls back to the 2D scene when the WebGL context is lost', () => {
+    mockMeasuredStage();
+
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => fakeBackend()}
+        onEffectiveTierChange={onTier}
+      />
+    );
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('0');
+
+    const lost = new Event('webglcontextlost', { cancelable: true });
+    act(() => {
+      screen.getByTestId('fx-canvas').dispatchEvent(lost);
+    });
+
+    // preventDefault lets the browser restore the context later, but the run
+    // already continues on the exact 2D path.
+    expect(lost.defaultPrevented).toBe(true);
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
+    expect(onTier).toHaveBeenLastCalledWith('off');
+  });
+
+  it('falls back when the frame pipeline throws outside the controller guard', () => {
+    mockMeasuredStage();
+
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => fakeBackend()}
+        onEffectiveTierChange={onTier}
+      />
+    );
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('0');
+
+    // A throw outside controller.render (e.g. building the scene snapshot)
+    // must not silently kill afterRender and freeze the GL canvas.
+    vi.spyOn(engine, 'getSceneSnapshot').mockImplementation(() => {
+      throw new Error('snapshot boom');
+    });
+    act(() => {
+      engine.frame(1);
+    });
+
+    expect(screen.getByTestId('game-canvas').style.opacity).toBe('1');
+    expect(screen.getByTestId('fx-canvas').style.display).toBe('none');
     expect(onTier).toHaveBeenLastCalledWith('off');
   });
 
@@ -714,7 +794,7 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     expect(backend.dispose).toHaveBeenCalled();
   });
 
-  it('drops one Auto tier after 5 s over 20 ms, never upgrades, and re-evaluates on retry', () => {
+  it('drops one Auto tier after 5 s over 20 ms, never upgrades, and re-evaluates on retry', async () => {
     mockDesktopPointer();
     mockMeasuredStage();
 
@@ -732,8 +812,10 @@ describe('GameCanvas two-canvas structure and fallback', () => {
 
     let now = 1000;
     const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
-    const driveFrames = (count: number) => {
-      act(() => {
+    // The downgrade is applied outside the frame callback (as a microtask),
+    // so each drive block is awaited before its tier assertion.
+    const driveFrames = async (count: number) => {
+      await act(async () => {
         for (let i = 0; i < count; i += 1) {
           now += 25;
           engine.afterRender?.(engine.getSceneSnapshot());
@@ -744,35 +826,76 @@ describe('GameCanvas two-canvas structure and fallback', () => {
     engine.status = 'playing';
     // 201 calls: the first stamps the clock, the remaining 200 × 25 ms fill
     // the 5 s adaptive window at a p95 well over the 20 ms threshold.
-    driveFrames(201);
+    await driveFrames(201);
     expect(onTier).toHaveBeenLastCalledWith('medium');
 
     // One downgrade per run: another slow window must not reach Low.
-    driveFrames(201);
+    await driveFrames(201);
     expect(onTier).toHaveBeenLastCalledWith('medium');
     expect(onTier.mock.calls.map(([tier]) => tier)).toEqual(['high', 'medium']);
 
     // Pausing and resuming is the same run and must not re-arm the budget.
     engine.status = 'paused';
-    driveFrames(1);
+    await driveFrames(1);
     engine.status = 'playing';
-    driveFrames(201);
+    await driveFrames(201);
     expect(onTier.mock.calls.map(([tier]) => tier)).toEqual(['high', 'medium']);
 
     // Retry re-arms the one-downgrade budget for the next run.
     engine.status = 'idle';
-    driveFrames(1);
+    await driveFrames(1);
     engine.status = 'playing';
-    driveFrames(201);
+    await driveFrames(201);
     expect(onTier).toHaveBeenLastCalledWith('low');
 
     // Never auto-upgrade, and no oscillation after the run's one downgrade.
-    driveFrames(201);
+    await driveFrames(201);
     expect(onTier.mock.calls.map(([tier]) => tier)).toEqual([
       'high',
       'medium',
       'low',
     ]);
+    nowSpy.mockRestore();
+  });
+
+  it('defers the auto-downgrade out of the frame callback', async () => {
+    mockDesktopPointer();
+    mockMeasuredStage();
+
+    const backend = fakeBackend();
+    const onTier = vi.fn();
+    render(
+      <GameCanvas
+        engine={engine}
+        backendFactory={() => backend}
+        onEffectiveTierChange={onTier}
+      />
+    );
+    expect(onTier).toHaveBeenLastCalledWith('high');
+
+    let now = 1000;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    engine.status = 'playing';
+
+    await act(async () => {
+      // 200 calls: the first stamps the clock, the remaining 199 x 25 ms
+      // leave the adaptive window just under the 5 s mark.
+      for (let i = 0; i < 200; i += 1) {
+        now += 25;
+        engine.afterRender?.(engine.getSceneSnapshot());
+      }
+      const resizesBefore = vi.mocked(backend.resize).mock.calls.length;
+
+      // The crossing frame must only schedule the downgrade: no FBO churn and
+      // no re-render inside the frame callback itself.
+      now += 25;
+      engine.afterRender?.(engine.getSceneSnapshot());
+      expect(vi.mocked(backend.resize).mock.calls.length).toBe(resizesBefore);
+      expect(onTier).toHaveBeenLastCalledWith('high');
+    });
+
+    // The deferred downgrade applies once the frame callback has returned.
+    expect(onTier).toHaveBeenLastCalledWith('medium');
     nowSpy.mockRestore();
   });
 

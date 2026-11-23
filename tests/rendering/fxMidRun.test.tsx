@@ -2,21 +2,38 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
 // The real GameCanvas needs a GPU; this test only exercises App's FX failure
-// policy, so it drives the same callback the canvas would report.
-vi.mock('../../src/components/GameCanvas', () => ({
-  GameCanvas: (props: { onEffectiveTierChange?: (tier: string) => void }) => (
-    <div>
-      <button
-        data-testid="sim-gl-high"
-        onClick={() => props.onEffectiveTierChange?.('high')}
-      />
-      <button
-        data-testid="sim-gl-off"
-        onClick={() => props.onEffectiveTierChange?.('off')}
-      />
-    </div>
-  ),
-}));
+// policy, so it drives the same callback the canvas would report. Like the
+// real component, it also reports the tier when the preference prop changes,
+// so manual panel selections see the same report timing as production.
+vi.mock('../../src/components/GameCanvas', async () => {
+  const React = await import('react');
+  return {
+    GameCanvas: (props: {
+      fxPreference?: string;
+      onEffectiveTierChange?: (tier: string) => void;
+    }) => {
+      React.useEffect(() => {
+        if (props.fxPreference === 'high') {
+          props.onEffectiveTierChange?.('high');
+        } else if (props.fxPreference === 'off') {
+          props.onEffectiveTierChange?.('off');
+        }
+      }, [props.fxPreference]);
+      return (
+        <div>
+          <button
+            data-testid="sim-gl-high"
+            onClick={() => props.onEffectiveTierChange?.('high')}
+          />
+          <button
+            data-testid="sim-gl-off"
+            onClick={() => props.onEffectiveTierChange?.('off')}
+          />
+        </div>
+      );
+    },
+  };
+});
 
 import { App } from '../../src/App';
 
@@ -57,6 +74,26 @@ describe('mid-run FX fallback', () => {
     // Auto is allowed to resolve Off silently; no persisted downgrade.
     expect(localStorage.getItem('flappy_fish_fx')).not.toBe('off');
     fireEvent.click(screen.getByTestId('fx-open-button'));
+    expect(screen.queryByTestId('fx-failure-message')).toBeNull();
+  });
+
+  it('does not show a failure message when the player manually selects Off while GL is running', () => {
+    localStorage.setItem('flappy_fish_fx', 'high');
+    render(<App />);
+
+    // The simulated canvas reports High on mount (a live GL path).
+    fireEvent.click(screen.getByTestId('sim-gl-high'));
+
+    // The player turns effects off from the panel. The canvas reports Off
+    // because the preference changed — that is a successful switch, not a
+    // failure, and must not raise the fallback message.
+    fireEvent.click(screen.getByTestId('fx-open-button'));
+    fireEvent.click(screen.getByTestId('fx-option-off'));
+
+    expect(localStorage.getItem('flappy_fish_fx')).toBe('off');
+    expect(screen.getByTestId('fx-option-off').getAttribute('aria-checked')).toBe(
+      'true'
+    );
     expect(screen.queryByTestId('fx-failure-message')).toBeNull();
   });
 });

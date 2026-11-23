@@ -2,6 +2,28 @@ import { PHYSICS_CONSTANTS } from './constants';
 import type { FishEntity, ObstacleEntity } from './types';
 
 /**
+ * Scroll speed for the current score: a gentle linear ramp from the base
+ * speed, capped so the game never exceeds MAX_HORIZONTAL_SPEED.
+ */
+export function speedForScore(score: number): number {
+  const ramped =
+    PHYSICS_CONSTANTS.HORIZONTAL_SPEED +
+    Math.max(0, score) * PHYSICS_CONSTANTS.SPEED_RAMP_PER_POINT;
+  return Math.min(ramped, PHYSICS_CONSTANTS.MAX_HORIZONTAL_SPEED);
+}
+
+/**
+ * Obstacle gap for the current score: tapers from the base gap down to
+ * MIN_OBSTACLE_GAP, which still leaves a passable corridor for the fish.
+ */
+export function gapForScore(score: number): number {
+  const narrowed =
+    PHYSICS_CONSTANTS.OBSTACLE_GAP -
+    Math.max(0, score) * PHYSICS_CONSTANTS.GAP_NARROW_PER_POINT;
+  return Math.max(narrowed, PHYSICS_CONSTANTS.MIN_OBSTACLE_GAP);
+}
+
+/**
  * Calculates dynamic fish pitch angle (rotation in radians) based on vertical velocity.
  * - Negative velocity (upward swim stroke) pitches up towards UPWARD_PITCH_ANGLE (-20° / -0.35 rad).
  * - Positive velocity (downward sink) pitches down towards DOWNWARD_PITCH_ANGLE (+45° / +0.78 rad).
@@ -161,16 +183,32 @@ export function checkFishObstacleCollision(
     return true;
   }
 
-  // Bottom jellyfish obstacle: ascends from seabed up to y=obstacle.bottomY
-  const hitBottom = circleIntersectsAABB(
+  // Bottom jellyfish: the painted bell is a dome hanging below bottomY (its
+  // top edge is at bottomY + bellHeight/4 at centre, bottomY + bellHeight at
+  // the sides), so it is tested as a circle over the rectangular tentacle
+  // column below the bell's widest line. This mirrors drawObstacles() and
+  // keeps the unpainted corners above the bell clear.
+  const bellHeight = PHYSICS_CONSTANTS.JELLY_BELL_HEIGHT;
+  const domeRadius = bellHeight * 0.75;
+
+  const hitJellyDome = circleIntersectsCircle(
+    fish.x,
+    fish.y,
+    effectiveRadius,
+    obstacle.x + obstacle.width / 2,
+    obstacle.bottomY + bellHeight,
+    domeRadius
+  );
+
+  const hitJellyBody = circleIntersectsAABB(
     fish.x,
     fish.y,
     effectiveRadius,
     obstacle.x,
-    obstacle.bottomY,
+    obstacle.bottomY + bellHeight,
     obstacle.x + obstacle.width,
     Number.POSITIVE_INFINITY
   );
 
-  return hitBottom;
+  return hitJellyDome || hitJellyBody;
 }

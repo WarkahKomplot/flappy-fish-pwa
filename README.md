@@ -3,7 +3,7 @@
 > An underwater, offline-capable Progressive Web App (PWA) clone of *Flappy Bird* with fluid aquatic physics, a 3-Pearl Bubble Shield combo system, procedural Web Audio, and milestone skin unlocks.
 
 [![Live Web App](https://img.shields.io/badge/Play%20Online-GitHub%20Pages-blue?style=for-the-badge&logo=github)](https://warkahkomplot.github.io/flappy-fish-pwa/)
-[![Tests](https://img.shields.io/badge/Vitest-479%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
+[![Tests](https://img.shields.io/badge/Vitest-531%20Passed-brightgreen?style=for-the-badge&logo=vitest)](https://github.com/WarkahKomplot/flappy-fish-pwa)
 [![PWA](https://img.shields.io/badge/PWA-100%25%20Offline-cyan?style=for-the-badge)](https://warkahkomplot.github.io/flappy-fish-pwa/)
 [![License](https://img.shields.io/badge/License-MIT-amber?style=for-the-badge)](LICENSE)
 
@@ -24,6 +24,8 @@ Instead of rigid gravity flaps and green pipes, **Flappy Fish** plunges you into
   * **Golden Manta:** Graceful diamond ray with harmonic wing flutter *(Unlocked at 150 Lifetime Pearls)*.
 * **⚡ 0.2-Second Frictionless Restart:** Instant tap-anywhere on death restarts your swim immediately. Zero ads, zero countdowns, zero loading screens.
 * **🎯 Generous Hitboxes:** Collision hitboxes are sized ~15% smaller than the visible sprites (`0.85x`), guaranteeing fair "near-miss" satisfaction without annoying grazing deaths.
+* **📈 Difficulty Curve:** Scroll speed ramps gently with your score (up to a cap) and obstacle gaps taper down to a fair floor, so late-run play stays tense without ever becoming unfair.
+* **🏅 Run Medals:** Score 10 / 25 / 50 on a run to earn Bronze / Silver / Gold on the game-over card.
 
 ---
 
@@ -106,7 +108,7 @@ These are additive overrides for QA only; a normal load uses none of them.
 * **Audio:** Web Audio API procedural synthesizer (zero audio assets).
 * **PWA:** Web App Manifest + Cache-First Service Worker (`public/sw.js`).
 * **CI/CD:** Automated GitHub Actions build and deployment to GitHub Pages on push to `main`.
-* **Testing:** Vitest + React Testing Library (479 unit & integration tests).
+* **Testing:** Vitest + React Testing Library (531 unit & integration tests).
 
 ---
 
@@ -123,7 +125,7 @@ npm install
 # Start local development server (http://localhost:3000)
 npm run dev
 
-# Run full test suite (479 tests)
+# Run full test suite (531 tests)
 npm test
 
 # Build production bundle

@@ -7,6 +7,17 @@ uniform float uTime;
 uniform vec4 uGameRect;
 uniform vec2 uWorld;
 uniform vec2 uShake;
+// 1/255 on 8-bit targets, 0 on half-float: ordered dither applied on write so
+// the deep-water gradient (a handful of linear LSBs) cannot quantize into
+// visible bands before the composite dither runs.
+uniform float uWriteDither;
+float bayer2(vec2 a) {
+  a = floor(a);
+  return fract(a.x * 0.5 + a.y * a.y * 0.75);
+}
+float bayer4(vec2 a) {
+  return bayer2(a * 0.5) * 0.25 + bayer2(a);
+}
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -117,5 +128,6 @@ void main() {
     step(0.72, rnd) *
     (0.5 + 0.5 * sin(uTime * 1.7 + rnd * 26.0));
   color += toLinear(vec3(0.35, 0.70, 0.78)) * mote * 0.35;
-  fragColor = vec4(color, 1.0);
+  color += (bayer4(gl_FragCoord.xy) - 0.5) * uWriteDither;
+  fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }

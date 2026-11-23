@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { SkinId, SkinDefinition } from '../game/types';
 import { SKIN_DEFINITIONS } from '../game/constants';
 import { isSkinUnlocked } from '../game/storage';
@@ -13,12 +13,23 @@ export interface SkinSelectorProps {
 
 const ALL_SKINS: SkinDefinition[] = Object.values(SKIN_DEFINITIONS);
 
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableIn(dialog: HTMLElement | null): HTMLElement[] {
+  if (!dialog) {
+    return [];
+  }
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+}
+
 /**
  * Milestone skin wardrobe modal:
  * - Neon Tetra (0 pearls - Default)
  * - Clownfish (50 lifetime pearls)
  * - Golden Manta (150 lifetime pearls)
  * Shows locked/unlocked status, equips active skin, and saves choice.
+ * Dialog behaviour (focus in/restore, Escape, Tab trap) mirrors FxPanel.
  */
 export const SkinSelector: React.FC<SkinSelectorProps> = ({
   isOpen,
@@ -27,22 +38,106 @@ export const SkinSelector: React.FC<SkinSelectorProps> = ({
   lifetimePearls,
   onSelectSkin,
 }) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  // Move focus in on open and return it to the trigger on close.
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const previous = typeof document !== 'undefined' ? document.activeElement : null;
+    returnFocusRef.current = previous instanceof HTMLElement ? previous : null;
+
+    dialogRef.current?.focus();
+
+    return () => {
+      const element = returnFocusRef.current;
+      returnFocusRef.current = null;
+      if (element && document.contains(element)) {
+        element.focus();
+      }
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [isOpen, onClose]);
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // GameCanvas listens on window for Space/ArrowUp; keep dialog keys local.
+    event.stopPropagation();
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key === 'Tab') {
+      const focusables = focusableIn(dialogRef.current);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      const inside =
+        active !== dialogRef.current && (dialogRef.current?.contains(active) ?? false);
+
+      if (event.shiftKey) {
+        if (!inside || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!inside || active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
     <div
       data-testid="skin-selector-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md select-none animate-fadeIn"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md select-none animate-fadeIn"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-2xl border border-slate-700/80 bg-slate-900/95 p-6 shadow-2xl backdrop-blur-xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skin-selector-title"
+        tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
+        className="w-full max-w-sm rounded-2xl border border-slate-700/80 bg-slate-900/95 p-6 shadow-2xl backdrop-blur-xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-800">
           <div>
-            <h2 className="text-xl font-black tracking-wide text-white flex items-center space-x-2">
+            <h2
+              id="skin-selector-title"
+              className="text-xl font-black tracking-wide text-white flex items-center space-x-2"
+            >
               <span>🐠</span>
               <span>Skin Wardrobe</span>
             </h2>

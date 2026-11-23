@@ -16,6 +16,7 @@ import sceneVertSource from './shaders/scene.vert?raw';
 import sceneFragSource from './shaders/scene.frag?raw';
 import brightFragSource from './shaders/bright.frag?raw';
 import blurFragSource from './shaders/blur.frag?raw';
+import downsampleFragSource from './shaders/downsample.frag?raw';
 import compositeFragSource from './shaders/composite.frag?raw';
 import spriteVertSource from './shaders/sprite.vert?raw';
 import particleVertSource from './shaders/particle.vert?raw';
@@ -27,6 +28,7 @@ interface BackgroundUniforms {
   gameRect: WebGLUniformLocation | null;
   world: WebGLUniformLocation | null;
   shake: WebGLUniformLocation | null;
+  writeDither: WebGLUniformLocation | null;
 }
 
 interface SceneUniforms {
@@ -35,6 +37,7 @@ interface SceneUniforms {
   resolution: WebGLUniformLocation | null;
   sceneSize: WebGLUniformLocation | null;
   shake: WebGLUniformLocation | null;
+  writeDither: WebGLUniformLocation | null;
 }
 
 interface BrightUniforms {
@@ -48,6 +51,12 @@ interface BlurUniforms {
   texelSize: WebGLUniformLocation | null;
   direction: WebGLUniformLocation | null;
   weight: WebGLUniformLocation | null;
+  upsample: WebGLUniformLocation | null;
+}
+
+interface DownsampleUniforms {
+  image: WebGLUniformLocation | null;
+  sourceTexelSize: WebGLUniformLocation | null;
 }
 
 interface CompositeUniforms {
@@ -194,6 +203,7 @@ export class WebGLBackend implements PostFXBackend {
   private sceneProgram: WebGLProgram | null = null;
   private brightProgram: WebGLProgram | null = null;
   private blurProgram: WebGLProgram | null = null;
+  private downsampleProgram: WebGLProgram | null = null;
   private compositeProgram: WebGLProgram | null = null;
   private spriteProgram: WebGLProgram | null = null;
   private particleProgram: WebGLProgram | null = null;
@@ -211,6 +221,7 @@ export class WebGLBackend implements PostFXBackend {
   private sceneUniforms: SceneUniforms | null = null;
   private brightUniforms: BrightUniforms | null = null;
   private blurUniforms: BlurUniforms | null = null;
+  private downsampleUniforms: DownsampleUniforms | null = null;
   private compositeUniforms: CompositeUniforms | null = null;
   private spriteUniforms: SpriteUniforms | null = null;
   private particleUniforms: ParticleUniforms | null = null;
@@ -274,6 +285,11 @@ export class WebGLBackend implements PostFXBackend {
         brightFragSource
       );
       this.blurProgram = createProgram(gl, backgroundVertSource, blurFragSource);
+      this.downsampleProgram = createProgram(
+        gl,
+        backgroundVertSource,
+        downsampleFragSource
+      );
       this.compositeProgram = createProgram(
         gl,
         backgroundVertSource,
@@ -299,6 +315,10 @@ export class WebGLBackend implements PostFXBackend {
         gameRect: gl.getUniformLocation(this.backgroundProgram, 'uGameRect'),
         world: gl.getUniformLocation(this.backgroundProgram, 'uWorld'),
         shake: gl.getUniformLocation(this.backgroundProgram, 'uShake'),
+        writeDither: gl.getUniformLocation(
+          this.backgroundProgram,
+          'uWriteDither'
+        ),
       };
       this.sceneUniforms = {
         scene: gl.getUniformLocation(this.sceneProgram, 'uScene'),
@@ -306,6 +326,7 @@ export class WebGLBackend implements PostFXBackend {
         resolution: gl.getUniformLocation(this.sceneProgram, 'uResolution'),
         sceneSize: gl.getUniformLocation(this.sceneProgram, 'uSceneSize'),
         shake: gl.getUniformLocation(this.sceneProgram, 'uShake'),
+        writeDither: gl.getUniformLocation(this.sceneProgram, 'uWriteDither'),
       };
       this.brightUniforms = {
         scene: gl.getUniformLocation(this.brightProgram, 'uScene'),
@@ -317,6 +338,14 @@ export class WebGLBackend implements PostFXBackend {
         texelSize: gl.getUniformLocation(this.blurProgram, 'uTexelSize'),
         direction: gl.getUniformLocation(this.blurProgram, 'uDirection'),
         weight: gl.getUniformLocation(this.blurProgram, 'uWeight'),
+        upsample: gl.getUniformLocation(this.blurProgram, 'uUpsample'),
+      };
+      this.downsampleUniforms = {
+        image: gl.getUniformLocation(this.downsampleProgram, 'uImage'),
+        sourceTexelSize: gl.getUniformLocation(
+          this.downsampleProgram,
+          'uSourceTexelSize'
+        ),
       };
       this.compositeUniforms = {
         scene: gl.getUniformLocation(this.compositeProgram, 'uScene'),
@@ -401,6 +430,21 @@ export class WebGLBackend implements PostFXBackend {
       height = Math.max(1, Math.floor(height * scale));
     }
 
+    // Same computed post size and bloom flag: the allocations already match
+    // (the setPreference-then-updateDimensions double call and no-op
+    // ResizeObserver ticks land here). Skip the release/allocate churn and
+    // the fxCanvas.width assignment, which would clear the presented frame.
+    if (
+      this.sceneFbo &&
+      width === this.postWidth &&
+      height === this.postHeight &&
+      profile.bloom === (this.bloomFbos.length > 0)
+    ) {
+      this.ensureParticlePool(profile.particleCount);
+      this.bloomThisFrame = false;
+      return;
+    }
+
     this.postWidth = width;
     this.postHeight = height;
 
@@ -469,6 +513,8 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform4f(uniforms.gameRect, rect.x, rect.y, rect.width, rect.height);
     gl.uniform2f(uniforms.world, snapshot.world.width, snapshot.world.height);
     gl.uniform2f(uniforms.shake, this.shakeX, this.shakeY);
+    // Ordered dither on 8-bit writes; no-op (0) on half-float targets.
+    gl.uniform1f(uniforms.writeDither, this.halfFloatTargets ? 0 : 1 / 255);
 
     this.drawQuad(gl, quad);
   }
@@ -499,6 +545,7 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform4f(uniforms.gameRect, rect.x, rect.y, rect.width, rect.height);
     gl.uniform2f(uniforms.resolution, this.postWidth, this.postHeight);
     gl.uniform2f(uniforms.shake, this.shakeX, this.shakeY);
+    gl.uniform1f(uniforms.writeDither, this.halfFloatTargets ? 0 : 1 / 255);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -681,9 +728,9 @@ export class WebGLBackend implements PostFXBackend {
   }
 
   /**
-   * Bright pass into mip 0, a separable 9-tap Gaussian per mip (each pass is
-   * also the downsample), then an additive upsample from the coarsest mip
-   * back to mip 0, which the composite samples.
+   * Bright pass into mip 0, then per mip a 4-tap tent downsample followed by
+   * a separable 1:1 Gaussian, then an additive 3x3 tent upsample from the
+   * coarsest mip back to mip 0, which the composite samples.
    */
   public bloom(_snapshot: SceneSnapshot, _profile: QualityProfile): void {
     const gl = this.gl;
@@ -722,25 +769,35 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform1f(bright.headroom, this.halfFloatTargets ? 1 : 4);
     this.drawQuad(gl, quad);
 
-    // Blur H then V at every level. The target texel size widens the kernel
-    // as the mip shrinks, so level i is built from level i-1.
-    for (let i = 0; i < BLOOM_MIPS; i++) {
-      const source = i === 0 ? head : this.bloomFbos[i - 1];
+    // Blur the head in place (H then V at 1:1 through the temp).
+    const headTemp = this.bloomTemps[0];
+    this.blurPass(gl, quad, head, headTemp, 1, 0, head.width, head.height, 1);
+    this.blurPass(gl, quad, headTemp, head, 0, 1, head.width, head.height, 1);
+
+    // Each coarser mip: a 4-tap tent downsample from the previous mip (the
+    // tent steps in SOURCE texels, so a non-exact 2x ratio from floor()
+    // rounding can never point-decimate and shimmer), then a 1:1 H/V blur.
+    for (let i = 1; i < BLOOM_MIPS; i++) {
+      const source = this.bloomFbos[i - 1];
       const temp = this.bloomTemps[i];
       const mip = this.bloomFbos[i];
 
-      this.blurPass(gl, quad, source, temp, 1, 0, temp.width, temp.height, 1);
+      this.downsamplePass(gl, quad, source, mip);
+      this.blurPass(gl, quad, mip, temp, 1, 0, temp.width, temp.height, 1);
       this.blurPass(gl, quad, temp, mip, 0, 1, mip.width, mip.height, 1);
     }
 
-    // Additive upsample: mip 2 -> mip 1 -> mip 0. The composite samples
-    // mip 0, so the coarser glow is folded back into the head level.
+    // Additive tent upsample: mip 2 -> mip 1 -> mip 0. The composite samples
+    // mip 0, so the coarser glow is folded back into the head level. The
+    // 3x3 source-texel tent avoids the blocky single-fetch upsample that made
+    // the glow flicker as it moved.
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(blurProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(blurUniforms.image, 0);
     gl.uniform2f(blurUniforms.direction, 0, 0);
+    gl.uniform1f(blurUniforms.upsample, 1);
     gl.uniform1f(blurUniforms.weight, BLOOM_UPSAMPLE_WEIGHT);
 
     for (let i = BLOOM_MIPS - 1; i >= 1; i--) {
@@ -861,6 +918,9 @@ export class WebGLBackend implements PostFXBackend {
         if (this.blurProgram) {
           gl.deleteProgram(this.blurProgram);
         }
+        if (this.downsampleProgram) {
+          gl.deleteProgram(this.downsampleProgram);
+        }
         if (this.compositeProgram) {
           gl.deleteProgram(this.compositeProgram);
         }
@@ -883,6 +943,7 @@ export class WebGLBackend implements PostFXBackend {
     this.sceneProgram = null;
     this.brightProgram = null;
     this.blurProgram = null;
+    this.downsampleProgram = null;
     this.compositeProgram = null;
     this.spriteProgram = null;
     this.particleProgram = null;
@@ -895,6 +956,7 @@ export class WebGLBackend implements PostFXBackend {
     this.sceneUniforms = null;
     this.brightUniforms = null;
     this.blurUniforms = null;
+    this.downsampleUniforms = null;
     this.compositeUniforms = null;
     this.spriteUniforms = null;
     this.particleUniforms = null;
@@ -1223,6 +1285,33 @@ export class WebGLBackend implements PostFXBackend {
     gl.uniform2f(uniforms.texelSize, 1 / texelWidth, 1 / texelHeight);
     gl.uniform2f(uniforms.direction, dirX, dirY);
     gl.uniform1f(uniforms.weight, weight);
+    gl.uniform1f(uniforms.upsample, 0);
+    this.drawQuad(gl, quad);
+  }
+
+  /**
+   * 4-tap tent downsample of `source` into the smaller `target`, stepping in
+   * the source mip's own texels.
+   */
+  private downsamplePass(
+    gl: WebGL2RenderingContext,
+    quad: Quad,
+    source: Framebuffer,
+    target: Framebuffer
+  ): void {
+    const uniforms = this.downsampleUniforms;
+    const program = this.downsampleProgram;
+
+    if (!uniforms || !program) {
+      return;
+    }
+
+    this.bindTarget(gl, target);
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, source.texture);
+    gl.uniform1i(uniforms.image, 0);
+    gl.uniform2f(uniforms.sourceTexelSize, 1 / source.width, 1 / source.height);
     this.drawQuad(gl, quad);
   }
 

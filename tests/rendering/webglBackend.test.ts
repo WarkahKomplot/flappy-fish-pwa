@@ -83,6 +83,7 @@ function createFakeGl(overrides: Record<string, unknown> = {}): FakeGl {
     bindTexture: vi.fn(),
     texParameteri: vi.fn(),
     texImage2D: vi.fn(),
+    texSubImage2D: vi.fn(),
     activeTexture: vi.fn(),
     deleteTexture: vi.fn(),
     createFramebuffer: vi.fn(() => ({})),
@@ -251,6 +252,12 @@ function uniform1fValue(gl: FakeGl, name: string): number | undefined {
     }
   }
   return undefined;
+}
+
+function uniform2fCalls(gl: FakeGl, name: string): Array<[number, number]> {
+  return mocked(gl.uniform2f)
+    .mock.calls.filter((call) => (call[0] as { name?: string } | null)?.name === name)
+    .map((call) => [call[1] as number, call[2] as number]);
 }
 
 function makeSnapshot(): SceneSnapshot {
@@ -499,6 +506,33 @@ describe('WebGLBackend resources and colour contract', () => {
     backend.dispose();
   });
 
+  it('skips FBO reallocation when the post size and bloom flag are unchanged', () => {
+    const gl = createFakeGl();
+    const { backend } = initBackend(gl);
+
+    backend.resize(390, 844, GAME_RECT, PROFILE);
+    const framebuffers = mocked(gl.createFramebuffer).mock.calls.length;
+    const textures = mocked(gl.createTexture).mock.calls.length;
+    const deletes = mocked(gl.deleteTexture).mock.calls.length;
+
+    // A second resize with the same computed post size and bloom flag (the
+    // setPreference-then-updateDimensions path, and no-op ResizeObserver
+    // ticks) must not churn the GPU allocations.
+    backend.resize(390, 844, GAME_RECT, PROFILE);
+    expect(mocked(gl.createFramebuffer).mock.calls.length).toBe(framebuffers);
+    expect(mocked(gl.createTexture).mock.calls.length).toBe(textures);
+    expect(mocked(gl.deleteTexture).mock.calls.length).toBe(deletes);
+
+    // A real size change still reallocates.
+    backend.resize(391, 844, GAME_RECT, PROFILE);
+    expect(mocked(gl.createFramebuffer).mock.calls.length).toBeGreaterThan(
+      framebuffers
+    );
+    expect(mocked(gl.createTexture).mock.calls.length).toBeGreaterThan(textures);
+
+    backend.dispose();
+  });
+
   it('draws background and scene into the FBO, then presents to the default framebuffer', () => {
     const gl = createFakeGl();
     const { backend, sceneCanvas } = initBackend(gl);
@@ -563,8 +597,9 @@ describe('WebGLBackend resources and colour contract', () => {
     backend.bloom(snapshot, PROFILE);
     backend.composite(snapshot, PROFILE);
 
-    // background + scene + bright + 3x(H+V) + 2 upsamples + composite.
-    expect(drawStates).toHaveLength(12);
+    // background + scene + bright + head blur H/V + 2x(downsample + H + V)
+    // + 2 tent upsamples + composite.
+    expect(drawStates).toHaveLength(14);
     expect(drawStates.some((draw) => draw.texture !== null)).toBe(true);
     for (const draw of drawStates) {
       if (draw.framebuffer) {
@@ -581,6 +616,73 @@ describe('WebGLBackend resources and colour contract', () => {
     expect(uniform1fValue(gl, 'uBloomScale')).toBe(4);
     expect(uniform1fValue(gl, 'uBloomEnabled')).toBe(1);
     expect(uniform1fValue(gl, 'uDither')).toBeCloseTo(1 / 255, 8);
+
+    backend.dispose();
+  });
+
+  it('downsamples each mip with a tent filter in source-texel units', () => {
+    const { gl } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeSnapshot();
+
+    backend.resize(390, 844, GAME_RECT, PROFILE);
+    mocked(gl.drawArrays).mockClear();
+
+    backend.bloom(snapshot, PROFILE);
+
+    // bright + head blur H/V + 2x (tent downsample + blur H + blur V)
+    // + 2 tent upsamples.
+    expect(mocked(gl.drawArrays).mock.calls.length).toBe(11);
+
+    // Each downsample steps in the SOURCE mip's texels (post 780x1688 ->
+    // mips 390x844, 195x422, 97x211), so a 2x size change can never fall on
+    // every-other source texel and alias high-frequency glow.
+    const sourceTexels = uniform2fCalls(gl, 'uSourceTexelSize');
+    expect(sourceTexels.some(([x, y]) => x === 1 / 390 && y === 1 / 844)).toBe(
+      true
+    );
+    expect(sourceTexels.some(([x, y]) => x === 1 / 195 && y === 1 / 422)).toBe(
+      true
+    );
+
+    backend.dispose();
+  });
+
+  it('dithers background and scene writes on 8-bit targets', () => {
+    const { gl } = createTrackedFakeGl();
+    const { backend } = initBackend(gl);
+    const snapshot = makeSnapshot();
+
+    backend.resize(390, 844, GAME_RECT, PROFILE);
+
+    backend.beginFrame(snapshot, PROFILE);
+    backend.background(snapshot, PROFILE);
+    // Deep-water gradients span a handful of linear LSBs; without an ordered
+    // dither on write they quantize into visible bands before the composite
+    // dither ever runs.
+    expect(uniform1fValue(gl, 'uWriteDither')).toBeCloseTo(1 / 255, 8);
+
+    backend.scene(snapshot, PROFILE);
+    expect(uniform1fValue(gl, 'uWriteDither')).toBeCloseTo(1 / 255, 8);
+
+    backend.dispose();
+  });
+
+  it('skips the write dither on half-float targets', () => {
+    const { gl } = createTrackedFakeGl({
+      getExtension: vi.fn((name: string) =>
+        name === 'EXT_color_buffer_half_float' ? {} : null
+      ),
+    });
+    const { backend } = initBackend(gl);
+    const snapshot = makeSnapshot();
+
+    backend.resize(390, 844, GAME_RECT, PROFILE);
+    backend.beginFrame(snapshot, PROFILE);
+    backend.background(snapshot, PROFILE);
+    backend.scene(snapshot, PROFILE);
+
+    expect(uniform1fValue(gl, 'uWriteDither')).toBe(0);
 
     backend.dispose();
   });
@@ -640,10 +742,11 @@ describe('WebGLBackend resources and colour contract', () => {
     expect(uploads.filter((call) => call[2] === gl.RGBA8)).toHaveLength(7);
     expect(gl.deleteFramebuffer).toHaveBeenCalled();
 
-    // The retry is one-shot: a later resize stays on RGBA8.
+    // The retry is one-shot: a later identical resize is a no-op on targets
+    // (same size, same bloom flag) and the device stays on RGBA8.
     backend.resize(390, 844, GAME_RECT, PROFILE);
     expect(uploads.filter((call) => call[2] === gl.RGBA16F)).toHaveLength(1);
-    expect(uploads.filter((call) => call[2] === gl.RGBA8)).toHaveLength(14);
+    expect(uploads.filter((call) => call[2] === gl.RGBA8)).toHaveLength(7);
 
     backend.beginFrame(snapshot, PROFILE);
     backend.background(snapshot, PROFILE);
@@ -684,7 +787,9 @@ describe('WebGLBackend resources and colour contract', () => {
     backend.bloom(snapshot, PROFILE);
     backend.composite(snapshot, PROFILE);
 
-    expect(drawStates).toHaveLength(15);
+    // 3 + (background + scene + bright + head blur H/V + 2x(downsample + H + V)
+    // + 2 tent upsamples + composite = 14).
+    expect(drawStates).toHaveLength(17);
     expect(uniform1fValue(gl, 'uBloomEnabled')).toBe(1);
 
     // High -> Low drops the bloom targets again.
@@ -696,7 +801,7 @@ describe('WebGLBackend resources and colour contract', () => {
     backend.scene(snapshot, low);
     backend.composite(snapshot, low);
 
-    expect(drawStates).toHaveLength(18);
+    expect(drawStates).toHaveLength(20);
     expect(uniform1fValue(gl, 'uBloomEnabled')).toBe(0);
 
     backend.dispose();

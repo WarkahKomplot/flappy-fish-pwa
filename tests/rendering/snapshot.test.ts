@@ -97,6 +97,18 @@ describe('GameEngine scene snapshot and render events', () => {
     expect(engine.obstacles[0].pearl?.y).toBe(200);
   });
 
+  it('reuses snapshot containers between calls (no per-frame allocation)', () => {
+    engine.start();
+    const a = engine.getSceneSnapshot();
+    const b = engine.getSceneSnapshot();
+
+    // The hot path is called at 60 Hz; the snapshot is consumed synchronously
+    // by the compositor, so its containers are pooled and mutated in place.
+    expect(b).toBe(a);
+    expect(b.fish).toBe(a.fish);
+    expect(b.obstacles).toBe(a.obstacles);
+  });
+
   it('emits a pearl event when collected', () => {
     engine.start();
     const obs = engine.obstacles[0];

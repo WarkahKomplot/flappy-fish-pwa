@@ -3,6 +3,8 @@ import {
   applySwimImpulse,
   updateFishPhysics,
   calculateFishRotation,
+  speedForScore,
+  gapForScore,
 } from '../src/game/physics';
 import { PHYSICS_CONSTANTS } from '../src/game/constants';
 import type { FishEntity } from '../src/game/types';
@@ -138,5 +140,27 @@ describe('Fish Physics and Movement Engine', () => {
       const halfDown = calculateFishRotation(PHYSICS_CONSTANTS.TERMINAL_VELOCITY / 2);
       expect(halfDown).toBeCloseTo(PHYSICS_CONSTANTS.DOWNWARD_PITCH_ANGLE / 2, 2);
     });
+  });
+});
+
+describe('Difficulty curve', () => {
+  it('ramps scroll speed with score and caps it at MAX_HORIZONTAL_SPEED', () => {
+    expect(speedForScore(0)).toBeCloseTo(PHYSICS_CONSTANTS.HORIZONTAL_SPEED);
+    expect(speedForScore(10)).toBeCloseTo(
+      PHYSICS_CONSTANTS.HORIZONTAL_SPEED + 10 * PHYSICS_CONSTANTS.SPEED_RAMP_PER_POINT
+    );
+    // Far past the cap: still clamped.
+    expect(speedForScore(10000)).toBeCloseTo(PHYSICS_CONSTANTS.MAX_HORIZONTAL_SPEED);
+  });
+
+  it('narrows the gap with score and floors it at MIN_OBSTACLE_GAP', () => {
+    expect(gapForScore(0)).toBeCloseTo(PHYSICS_CONSTANTS.OBSTACLE_GAP);
+    expect(gapForScore(10)).toBeCloseTo(
+      PHYSICS_CONSTANTS.OBSTACLE_GAP - 10 * PHYSICS_CONSTANTS.GAP_NARROW_PER_POINT
+    );
+    // Far past the floor: still clamped.
+    expect(gapForScore(10000)).toBeCloseTo(PHYSICS_CONSTANTS.MIN_OBSTACLE_GAP);
+    // The floor must leave a fair, passable gap for the 16px fish hitbox.
+    expect(PHYSICS_CONSTANTS.MIN_OBSTACLE_GAP).toBeGreaterThanOrEqual(100);
   });
 });

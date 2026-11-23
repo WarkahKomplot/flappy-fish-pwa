@@ -33,21 +33,25 @@ describe('PWA & Deployment Pipeline', () => {
       expect(manifest.theme_color).toBe('#0369a1');
     });
 
-    it('declares 192x192 and 512x512 SVG icons', () => {
+    it('declares 192x192 and 512x512 PNG install icons', () => {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
       expect(Array.isArray(manifest.icons)).toBe(true);
       expect(manifest.icons.length).toBeGreaterThanOrEqual(2);
 
-      const icon192 = manifest.icons.find((i: any) => i.sizes === '192x192');
-      const icon512 = manifest.icons.find((i: any) => i.sizes === '512x512');
+      // PNG install icons: iOS ignores SVG touch icons and some installers
+      // require PNG. The SVG set remains as a modern-browser extra.
+      const png192 = manifest.icons.find(
+        (i: any) => i.sizes === '192x192' && i.type === 'image/png' && i.purpose === 'any'
+      );
+      const png512 = manifest.icons.find(
+        (i: any) => i.sizes === '512x512' && i.type === 'image/png' && i.purpose === 'any'
+      );
 
-      expect(icon192).toBeDefined();
-      expect(icon192.src).toContain('icon-192.svg');
-      expect(icon192.type).toBe('image/svg+xml');
+      expect(png192).toBeDefined();
+      expect(png192.src).toContain('icon-192.png');
 
-      expect(icon512).toBeDefined();
-      expect(icon512.src).toContain('icon-512.svg');
-      expect(icon512.type).toBe('image/svg+xml');
+      expect(png512).toBeDefined();
+      expect(png512.src).toContain('icon-512.png');
     });
   });
 
@@ -76,13 +80,13 @@ describe('PWA & Deployment Pipeline', () => {
   });
 
   describe('Service Worker (public/sw.js) - Review Focus 5', () => {
-    it('exists and implements cache-first offline strategy', () => {
+    it('exists and implements the offline/update strategy', () => {
       expect(fs.existsSync(swPath)).toBe(true);
       const swCode = fs.readFileSync(swPath, 'utf-8');
 
-      // Cache name
+      // Cache name (single deploy knob for cached shell content)
       expect(swCode).toMatch(/CACHE_NAME\s*=/);
-      expect(swCode).toContain("'flappy-fish-v3'");
+      expect(swCode).toContain("'flappy-fish-v4'");
 
       // The registration query forces returning clients onto the new shell.
       const mainCode = fs.readFileSync(
@@ -103,7 +107,7 @@ describe('PWA & Deployment Pipeline', () => {
       expect(swCode).toContain("'activate'");
       expect(swCode).toContain('clients.claim');
 
-      // Fetch handler cache-first logic
+      // Fetch handler logic (network-first navigations + cache-first assets)
       expect(swCode).toContain("'fetch'");
       expect(swCode).toContain('caches.match');
       expect(swCode).toContain('fetch(');
@@ -122,8 +126,19 @@ describe('PWA & Deployment Pipeline', () => {
       expect(html).toContain('name="apple-mobile-web-app-capable" content="yes"');
       expect(html).toContain('name="apple-mobile-web-app-status-bar-style" content="black-translucent"');
       expect(html).toContain('name="apple-mobile-web-app-title" content="FlappyFish"');
-      expect(html).toContain('rel="apple-touch-icon" href="./icons/icon-192.svg"');
+      expect(html).toContain('rel="apple-touch-icon" href="./icons/apple-touch-icon.png"');
       expect(html).toContain('<title>Flappy Fish - Deep Sea Arcade</title>');
+    });
+
+    it('keeps pinch zoom available for accessibility', () => {
+      const html = fs.readFileSync(indexPath, 'utf-8');
+
+      // The game stage already blocks pinch with touch-action: none, so the
+      // viewport meta must not additionally lock out zooming on the help and
+      // score text (screen magnification, low-vision users).
+      expect(html).toContain('viewport-fit=cover');
+      expect(html).not.toContain('user-scalable=no');
+      expect(html).not.toContain('maximum-scale');
     });
 
     it('registers the service worker only from the production entry, not the HTML', () => {

@@ -82,35 +82,30 @@ export function App() {
     isExplicitGlTier(fxPreference) ? fxPreference : null
   );
   const fxPreferenceRef = useRef<FxPreference>(fxPreference);
-  useEffect(() => {
-    fxPreferenceRef.current = fxPreference;
-  }, [fxPreference]);
 
-  // Singleton GameEngine reference
-  const engineRef = useRef<GameEngine | null>(null);
-
-  if (!engineRef.current) {
-    engineRef.current = new GameEngine({
-      activeSkin: getActiveSkin(),
-      onScoreChange: (newScore) => {
-        setScore(newScore);
-      },
-      onComboChange: (newCombo, shield) => {
-        setCombo(newCombo);
-        setHasShield(shield);
-      },
-      onGameOver: (finalScore, finalHigh, finalRunPearls, newBest) => {
-        setStatus('gameover');
-        setScore(finalScore);
-        setHighScore(finalHigh);
-        setRunPearls(finalRunPearls);
-        setIsNewBest(newBest);
-        setLifetimePearls(getLifetimePearls());
-      },
-    });
-  }
-
-  const engine = engineRef.current;
+  // Lazy singleton: the initializer runs once when the state is created, not
+  // in a render body (and never again on re-renders).
+  const [engine] = useState(
+    () =>
+      new GameEngine({
+        activeSkin: getActiveSkin(),
+        onScoreChange: (newScore) => {
+          setScore(newScore);
+        },
+        onComboChange: (newCombo, shield) => {
+          setCombo(newCombo);
+          setHasShield(shield);
+        },
+        onGameOver: (finalScore, finalHigh, finalRunPearls, newBest) => {
+          setStatus('gameover');
+          setScore(finalScore);
+          setHighScore(finalHigh);
+          setRunPearls(finalRunPearls);
+          setIsNewBest(newBest);
+          setLifetimePearls(getLifetimePearls());
+        },
+      })
+  );
 
   // Clean up engine animation frames on unmount
   useEffect(() => {
@@ -119,23 +114,33 @@ export function App() {
     };
   }, [engine]);
 
-  // Primary tap handler for state transitions
-  const handleTap = useCallback(() => {
-    if (status === 'idle') {
-      engine.start();
-      setStatus('playing');
-    } else if (status === 'gameover') {
-      engine.start();
-      setStatus('playing');
-      setScore(0);
-      setRunPearls(0);
-      setCombo(0);
-      setHasShield(false);
-      setIsNewBest(false);
-      setHighScore(getHighScore());
-      setLifetimePearls(getLifetimePearls());
-    }
-  }, [engine, status]);
+  // Single input dispatch. Every gesture (stage tap, key, overlay tap) reaches
+  // the engine exactly once — the engine owns the idle->start / flap /
+  // game-over->restart transition — and React state is then synced from it.
+  const handleGameInput = useCallback(() => {
+    engine.handleInput();
+    setStatus(engine.status);
+    setScore(engine.score);
+    setRunPearls(engine.runPearls);
+    setCombo(engine.comboManager.combo);
+    setHasShield(engine.comboManager.hasShield);
+    setIsNewBest(engine.isNewBest);
+    setHighScore(engine.highScore);
+    setLifetimePearls(getLifetimePearls());
+  }, [engine]);
+
+  // Auto-pause when the page hides: browsers throttle rAF while hidden, so a
+  // run left playing would advance (and kill the fish) while the player is away.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        engine.pause();
+        setStatus(engine.status);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [engine]);
 
   // Pause / Resume toggle
   const handleTogglePause = useCallback(() => {
@@ -166,6 +171,10 @@ export function App() {
   const handleSelectFx = useCallback(
     (pref: FxPreference) => {
       saveFxPreference(pref);
+      // Sync the ref immediately: GameCanvas reports the applied tier from a
+      // child effect that runs before the ref-sync effect below, so a delayed
+      // ref makes a manual Off look like a mid-run failure.
+      fxPreferenceRef.current = pref;
       setFxPreference(pref);
       setFxFailureMessage(null);
       // Re-selecting the current value is a React no-op and never reaches
@@ -194,6 +203,7 @@ export function App() {
     }
 
     saveFxPreference('off');
+    fxPreferenceRef.current = 'off';
     setFxPreference('off');
     setFxFailureMessage('Effects unavailable — switched to Off');
   }, []);
@@ -204,21 +214,13 @@ export function App() {
     setFxFailureMessage(null);
   }, []);
 
-  // Instant retry (<0.2s transition)
-  const handleRetry = useCallback(() => {
-    engine.start();
-    setStatus('playing');
-    setScore(0);
-    setRunPearls(0);
-    setCombo(0);
-    setHasShield(false);
-    setIsNewBest(false);
-    setHighScore(getHighScore());
-    setLifetimePearls(getLifetimePearls());
-  }, [engine]);
-
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
+    <div
+      className="flex h-screen w-screen items-center justify-center bg-slate-950 text-slate-100 overflow-hidden font-sans select-none"
+      // 100dvh is exact under iOS Safari's dynamic toolbar; browsers that
+      // cannot parse it drop the inline height and keep the h-screen fallback.
+      style={{ height: '100dvh' }}
+    >
       {/* Mobile-proportioned portrait stage */}
       <main
         className="relative h-full w-full max-w-md overflow-hidden bg-slate-900 shadow-2xl flex flex-col"
@@ -227,7 +229,8 @@ export function App() {
         {/* 60fps Canvas 2D Engine Viewport (with the WebGL compositor canvas) */}
         <GameCanvas
           engine={engine}
-          onTap={handleTap}
+          onTap={handleGameInput}
+          inputEnabled={!isSkinModalOpen && !isFxOpen}
           fxPreference={fxPreference}
           onEffectiveTierChange={handleEffectiveTierChange}
           qaFlags={qaFlags}
@@ -255,7 +258,7 @@ export function App() {
             lifetimePearls={lifetimePearls}
             activeSkin={activeSkin}
             onOpenSkins={() => setIsSkinModalOpen(true)}
-            onStart={handleTap}
+            onStart={handleGameInput}
             onOpenFx={handleOpenFx}
           />
         )}
@@ -269,7 +272,7 @@ export function App() {
             lifetimePearls={lifetimePearls}
             isNewHighScore={isNewBest}
             isFxActive={effectiveTier !== 'off'}
-            onRetry={handleRetry}
+            onRetry={handleGameInput}
           />
         )}
 

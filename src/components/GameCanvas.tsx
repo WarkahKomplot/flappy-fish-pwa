@@ -88,6 +88,8 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 export interface GameCanvasProps {
   engine: GameEngine;
   onTap?: () => void;
+  /** False while a modal owns the stage: all input is dropped. */
+  inputEnabled?: boolean;
   className?: string;
   fxPreference?: FxPreference;
   onEffectiveTierChange?: (tier: QualityTier) => void;
@@ -117,6 +119,7 @@ export interface GameCanvasProps {
 export const GameCanvas: React.FC<GameCanvasProps> = ({
   engine,
   onTap,
+  inputEnabled = true,
   className = '',
   fxPreference = 'auto',
   onEffectiveTierChange,
@@ -341,6 +344,38 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
      * presented frames (not simulation time), so a 30 fps display shows
      * ~33 ms and crosses the 20 ms adaptive threshold as intended.
      */
+    // The tier switch reallocates FBOs and re-renders, so it must never run
+    // inside the frame callback: it is scheduled here and applied after the
+    // callback returns (still before the next frame).
+    let pendingDowngrade: QualityTier | null = null;
+    let downgradeScheduled = false;
+
+    const scheduleDowngrade = (next: QualityTier) => {
+      downgradedThisRun = true;
+      autoTier = next;
+      pendingDowngrade = next;
+      if (downgradeScheduled) {
+        return;
+      }
+      downgradeScheduled = true;
+      queueMicrotask(() => {
+        downgradeScheduled = false;
+        const tier = pendingDowngrade;
+        pendingDowngrade = null;
+        if (disposed || tier === null || !controller) {
+          return;
+        }
+        try {
+          controller.setPreference('auto', tier);
+          // Re-measure: captureDpr changed with the profile.
+          updateDimensions();
+          reportAppliedTier();
+        } catch {
+          enterFallback();
+        }
+      });
+    };
+
     const recordFrame = (snapshot: SceneSnapshot) => {
       const now =
         typeof performance !== 'undefined' &&
@@ -391,16 +426,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           const p95 = windowStats.percentile(0.95);
           const next = nextTier(controller.tier, p95);
           if (next !== controller.tier) {
-            downgradedThisRun = true;
-            autoTier = next;
-            try {
-              controller.setPreference('auto', autoTier);
-              // Re-measure: captureDpr changed with the profile.
-              updateDimensions();
-              reportAppliedTier();
-            } catch {
-              enterFallback();
-            }
+            scheduleDowngrade(next);
           }
         }
 
@@ -417,19 +443,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const renderAndRecord = (snapshot: SceneSnapshot) => {
       try {
         controller?.render(snapshot);
+        updateRibbonLabel(snapshot);
+        recordFrame(snapshot);
       } catch {
         enterFallback();
-        return;
       }
-      updateRibbonLabel(snapshot);
-      recordFrame(snapshot);
     };
 
-    const renderFrozenFallback = () => {
-      if (!frozen || glVisible) {
-        return;
-      }
-
+    const repaintScene = () => {
       const ctx = sceneCanvas.getContext('2d');
       if (!ctx) {
         return;
@@ -452,6 +473,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
     };
 
+    const renderFrozenFallback = () => {
+      if (!frozen || glVisible) {
+        return;
+      }
+      repaintScene();
+    };
+
     const sizeFallback = () => {
       const rect = container.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
@@ -468,6 +496,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         currentStageHeight = 0;
         engine.resize(WORLD_WIDTH, WORLD_HEIGHT, visibleDpr());
       }
+      // engine.resize() resets the canvas backing store, so the preserved 2D
+      // frame must be repainted immediately or the stage is blank until the
+      // next rAF repaints.
+      repaintScene();
     };
 
     const showSceneOnly = () => {
@@ -740,6 +772,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       renderFrozenFallback();
     };
 
+    // A throw outside the controller guard (engine.frame's own catch) must
+    // still land in the fallback instead of freezing the GL canvas.
+    engine.onRenderFailure = enterFallback;
+
+    // GPU context loss (mobile GPUs reclaim contexts under memory pressure):
+    // preventDefault opts in to a possible restore, but the run continues on
+    // the exact Canvas 2D path either way.
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      enterFallback();
+    };
+    fxCanvas.addEventListener('webglcontextlost', handleContextLost);
+
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(handleResize);
@@ -766,8 +811,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
       available = false;
       engine.afterRender = undefined;
+      engine.onRenderFailure = undefined;
       engine.backgroundVisible = true;
       engine.ribbonLabelDom = false;
+      fxCanvas.removeEventListener('webglcontextlost', handleContextLost);
 
       if (controller) {
         try {
@@ -798,16 +845,23 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     // `?freeze` is a static inspection mode: no tap/key handler may unpause the
     // fixture or start a run, otherwise the frame would stop being reproducible.
-    if (qaFlags.freeze) {
+    // `inputEnabled` is false while a modal owns the stage.
+    if (qaFlags.freeze || !inputEnabled) {
       return;
     }
+
+    // Every gesture is dispatched exactly once through onTap (the app shell
+    // owns the engine call); calling engine.handleInput() here as well turned
+    // one tap into two restarts on the idle/game-over transitions.
+    const dispatch = () => {
+      onTapRef.current?.();
+    };
 
     // Direct non-passive touch listener eliminates the 300ms tap delay and
     // prevents iOS Safari elastic bounce / double-tap zoom.
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
-      engine.handleInput();
-      onTapRef.current?.();
+      dispatch();
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -816,21 +870,25 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         return;
       }
       e.preventDefault();
-      engine.handleInput();
-      onTapRef.current?.();
+      dispatch();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'ArrowUp') {
-        // A focused button/radio/dialog owns the key; activating it must not
-        // also start a run or flap behind the overlay.
-        if (isInteractiveTarget(e.target)) {
-          return;
-        }
-        e.preventDefault();
-        engine.handleInput();
-        onTapRef.current?.();
+      if (e.repeat) {
+        return;
       }
+      const isFlapKey = e.code === 'Space' || e.code === 'ArrowUp';
+      const isRetryKey = e.code === 'Enter' && engine.status === 'gameover';
+      if (!isFlapKey && !isRetryKey) {
+        return;
+      }
+      // A focused button/radio/dialog owns the key; activating it must not
+      // also start a run or flap behind the overlay.
+      if (isInteractiveTarget(e.target)) {
+        return;
+      }
+      e.preventDefault();
+      dispatch();
     };
 
     // Listen on the full stage container, not just the canvas: the bars
@@ -844,7 +902,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       container.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [engine, qaFlags.freeze]);
+  }, [engine, qaFlags.freeze, inputEnabled]);
 
   return (
     <div

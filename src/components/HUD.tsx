@@ -35,7 +35,10 @@ export const HUD: React.FC<HUDProps> = ({
   const isPlayingOrPaused = status === 'playing' || status === 'paused';
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-4 select-none">
+    <div
+      data-testid="hud-root"
+      className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] select-none"
+    >
       {/* Static readability scrims behind the score/combo. CSS-only and
           non-interactive; the 44 px controls keep their hit areas. */}
       {isPlayingOrPaused && (

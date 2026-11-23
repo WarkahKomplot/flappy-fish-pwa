@@ -10,7 +10,6 @@ export interface QualityProfile {
   postDpr: number;
   maxPostPixels: number;
   bloom: boolean;
-  godRays: boolean;
   chromaticAberration: boolean;
   grain: boolean;
   effects: boolean;

@@ -242,6 +242,17 @@ describe('Procedural Web Audio API Synthesizer', () => {
       // Stopped around ~80ms later (currentTime + 0.08)
       expect(source.stop).toHaveBeenCalledWith(expect.closeTo(mockCtx.currentTime + 0.08, 2));
     });
+
+    it('reuses one noise buffer across flaps instead of resynthesizing per tap', () => {
+      playSwimFlap();
+      playSwimFlap();
+      playSwimFlap();
+
+      // The noise buffer is per-context static; only the source/filter/gain
+      // chain is built per tap.
+      expect(mockCtx.createBuffer).toHaveBeenCalledTimes(1);
+      expect(mockCtx.createBufferSource).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe('playPearlChime', () => {

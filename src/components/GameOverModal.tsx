@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React from 'react';
+import { getMedal } from '../game/medals';
 
 export interface GameOverModalProps {
   score: number;
@@ -34,17 +35,10 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   isNewHighScore = false,
   isFxActive = false,
 }) => {
-  // Listen for Space/Enter key for instant desktop keyboard retry
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'Enter') {
-        e.preventDefault();
-        onRetry();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onRetry]);
+  // Keyboard retry (Space/Enter) is owned by the single app-level input path
+  // in GameCanvas; a window listener here double-dispatched with it.
+  const medal = getMedal(score);
+  const medalLabel = medal === 'gold' ? '🥇' : medal === 'silver' ? '🥈' : '🥉';
 
   return (
     <div
@@ -59,10 +53,6 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         className={`w-full max-w-xs rounded-2xl border border-slate-700/80 bg-slate-900/90 p-6 shadow-2xl text-center ${
           isFxActive ? '' : 'backdrop-blur-xl'
         }`}
-        onClick={() => {
-          // Allow tapping anywhere on modal box to retry as well
-          onRetry();
-        }}
       >
         {/* Modal Header */}
         <div className="mb-4">
@@ -73,6 +63,16 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           {isNewHighScore && (
             <div className="mt-1 inline-block rounded-full bg-amber-400/20 border border-amber-400 px-3 py-0.5 text-[11px] font-bold text-amber-300 animate-pulse">
               🎉 NEW BEST!
+            </div>
+          )}
+          {medal && (
+            <div
+              data-testid="medal-badge"
+              data-medal={medal}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-800/80 border border-slate-600 px-3 py-0.5 text-[11px] font-bold text-slate-200"
+            >
+              <span aria-hidden="true">{medalLabel}</span>
+              <span className="uppercase tracking-wider">{medal} medal</span>
             </div>
           )}
         </div>

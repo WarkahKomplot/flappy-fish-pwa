@@ -4,6 +4,8 @@ import {
   updateFishPhysics,
   checkFishObstacleCollision,
   checkFishBoundsCollision,
+  speedForScore,
+  gapForScore,
 } from './physics';
 import { ComboManager } from './combo';
 import { soundEffects, type SoundEffects } from './audio';
@@ -92,6 +94,36 @@ export class GameEngine {
   public events: RenderEvent[] = [];
 
   /**
+   * Pooled per-frame snapshot. The compositor consumes the snapshot
+   * synchronously inside afterRender, so its containers are mutated in place
+   * instead of allocating ~15 objects at 60 Hz. Live engine entities are
+   * never aliased: only primitives (and immutable render events) are copied.
+   */
+  private readonly snapshotScratch: SceneSnapshot = {
+    time: 0,
+    status: 'idle',
+    world: {
+      width: PHYSICS_CONSTANTS.CANVAS_WIDTH,
+      height: PHYSICS_CONSTANTS.CANVAS_HEIGHT,
+    },
+    fish: {
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: PHYSICS_CONSTANTS.FISH_RADIUS,
+      rotation: 0,
+      skin: 'neon-tetra',
+      isDead: false,
+      invulnerableTime: 0,
+    },
+    obstacles: [],
+    shield: { active: false, activeTime: 0 },
+    ribbon: { x: -9999, target: 0, crossed: true },
+    events: [],
+  };
+
+  /**
    * When false the Canvas 2D background fill is skipped so the WebGL
    * compositor can own the full-bleed background. Always true in fallback.
    */
@@ -108,6 +140,13 @@ export class GameEngine {
    * renderer throws so the game falls back to plain Canvas 2D and keeps going.
    */
   public afterRender?: (snapshot: SceneSnapshot) => void;
+
+  /**
+   * Called when the frame pipeline throws outside the compositor's own guard,
+   * so the renderer owner can fall back instead of leaving a frozen GL canvas
+   * while the simulation keeps advancing underneath.
+   */
+  public onRenderFailure?: () => void;
 
   private canvas: HTMLCanvasElement | null = null;
   private canvasCtx: CanvasRenderingContext2D | null = null;
@@ -353,6 +392,9 @@ export class GameEngine {
       return;
     }
 
+    // Difficulty curve: the scroll speed ramps with the score (capped).
+    const scrollSpeed = speedForScore(this.score);
+
     // 1. Fish physics integration
     updateFishPhysics(this.fish, dt);
 
@@ -402,7 +444,7 @@ export class GameEngine {
 
     // 5. In-Water Personal Best ribbon update
     if (this.highScore > 0) {
-      this.ribbonX -= PHYSICS_CONSTANTS.HORIZONTAL_SPEED * dt;
+      this.ribbonX -= scrollSpeed * dt;
       if (!this.ribbonCrossed && this.ribbonX <= this.fish.x) {
         this.ribbonCrossed = true;
         this.soundEffects.playPersonalBest();
@@ -414,11 +456,11 @@ export class GameEngine {
     // 6. Obstacle scrolling, collectibles, scoring, and collision detection
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obs = this.obstacles[i];
-      obs.x -= PHYSICS_CONSTANTS.HORIZONTAL_SPEED * dt;
+      obs.x -= scrollSpeed * dt;
 
       // Update pearl position and check collection
       if (obs.pearl) {
-        obs.pearl.x -= PHYSICS_CONSTANTS.HORIZONTAL_SPEED * dt;
+        obs.pearl.x -= scrollSpeed * dt;
 
         if (!obs.pearl.collected && !obs.pearl.missed) {
           const pearlY = resolvePearlY(
@@ -505,7 +547,9 @@ export class GameEngine {
       const nextX = lastObs
         ? lastObs.x + PHYSICS_CONSTANTS.OBSTACLE_SPACING
         : PHYSICS_CONSTANTS.CANVAS_WIDTH + 60;
-      const newObs = createObstaclePair(nextX, PHYSICS_CONSTANTS.CANVAS_HEIGHT);
+      const newObs = createObstaclePair(nextX, PHYSICS_CONSTANTS.CANVAS_HEIGHT, {
+        gapSize: gapForScore(this.score),
+      });
       newObs.pearl = createPearlForGap(newObs);
       this.obstacles.push(newObs);
     }
@@ -547,52 +591,72 @@ export class GameEngine {
 
   /**
    * Builds the read-only per-frame contract consumed by the WebGL compositor.
-   * Event expiry is applied here and written back so the queue cannot grow.
+   * Returns the pooled snapshot: consume it synchronously; the next call
+   * mutates the same containers. Event expiry is applied in place so the
+   * queue cannot grow.
    */
   public getSceneSnapshot(): SceneSnapshot {
-    this.events = this.events.filter((event) => event.t >= this.gameTime - 1);
+    let write = 0;
+    for (let read = 0; read < this.events.length; read++) {
+      if (this.events[read].t >= this.gameTime - 1) {
+        this.events[write++] = this.events[read];
+      }
+    }
+    this.events.length = write;
 
-    return {
-      time: this.gameTime,
-      status: this.status,
-      world: {
-        width: PHYSICS_CONSTANTS.CANVAS_WIDTH,
-        height: PHYSICS_CONSTANTS.CANVAS_HEIGHT,
-      },
-      fish: { ...this.fish },
-      obstacles: this.obstacles.map((obs) => ({
-        x: obs.x,
-        width: obs.width,
-        topHeight: obs.topHeight,
-        bottomY: obs.bottomY,
-        ...(obs.pearl
-          ? {
-              pearl: {
-                x: obs.pearl.x,
-                y: obs.pearl.y,
-                visualY: resolvePearlY(
-                  this.gameTime,
-                  getEntitySeed(obs.id),
-                  obs.pearl.y
-                ),
-                radius: obs.pearl.radius,
-                collected: obs.pearl.collected,
-                missed: Boolean(obs.pearl.missed),
-              },
-            }
-          : {}),
-      })),
-      shield: {
-        active: this.comboManager.hasShield,
-        activeTime: this.comboManager.shieldActiveTime,
-      },
-      ribbon: {
-        x: this.ribbonX,
-        target: this.ribbonTargetScore,
-        crossed: this.ribbonCrossed,
-      },
-      events: this.events.slice(),
-    };
+    const snap = this.snapshotScratch;
+    snap.time = this.gameTime;
+    snap.status = this.status;
+    Object.assign(snap.fish, this.fish);
+    snap.shield.active = this.comboManager.hasShield;
+    snap.shield.activeTime = this.comboManager.shieldActiveTime;
+    snap.ribbon.x = this.ribbonX;
+    snap.ribbon.target = this.ribbonTargetScore;
+    snap.ribbon.crossed = this.ribbonCrossed;
+
+    for (let i = 0; i < this.obstacles.length; i++) {
+      const obs = this.obstacles[i];
+      const slot =
+        snap.obstacles[i] ??
+        (snap.obstacles[i] = { x: 0, width: 0, topHeight: 0, bottomY: 0 });
+      slot.x = obs.x;
+      slot.width = obs.width;
+      slot.topHeight = obs.topHeight;
+      slot.bottomY = obs.bottomY;
+
+      if (obs.pearl) {
+        const pearl =
+          slot.pearl ??
+          (slot.pearl = {
+            x: 0,
+            y: 0,
+            visualY: 0,
+            radius: 0,
+            collected: false,
+            missed: false,
+          });
+        pearl.x = obs.pearl.x;
+        pearl.y = obs.pearl.y;
+        pearl.visualY = resolvePearlY(
+          this.gameTime,
+          getEntitySeed(obs.id),
+          obs.pearl.y
+        );
+        pearl.radius = obs.pearl.radius;
+        pearl.collected = obs.pearl.collected;
+        pearl.missed = Boolean(obs.pearl.missed);
+      } else {
+        slot.pearl = undefined;
+      }
+    }
+    snap.obstacles.length = this.obstacles.length;
+
+    snap.events.length = 0;
+    for (let i = 0; i < this.events.length; i++) {
+      snap.events.push(this.events[i]);
+    }
+
+    return snap;
   }
 
   /**
@@ -612,6 +676,11 @@ export class GameEngine {
     } catch {
       this.afterRender = undefined;
       this.backgroundVisible = true;
+      try {
+        this.onRenderFailure?.();
+      } catch {
+        // The failure handler must never take down the rAF loop either.
+      }
     }
   }
 
@@ -779,7 +848,9 @@ export class GameEngine {
       const bellY = obs.bottomY;
       const bellWidth = obs.width;
       const pulse = Math.sin(this.gameTime * 4 + obs.x * 0.03) * 3;
-      const bellHeight = 36 + pulse;
+      // Unpulsed height is the shared hitbox constant so the painted bell and
+      // its collision dome cannot drift apart (the pulse is visual-only).
+      const bellHeight = PHYSICS_CONSTANTS.JELLY_BELL_HEIGHT + pulse;
 
       // Jellyfish dome / bell gradient
       const jellyGrad = ctx.createRadialGradient(

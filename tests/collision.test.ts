@@ -164,14 +164,12 @@ describe('Generous Collision Detection Engine', () => {
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
     });
 
-    it('grants generous near-miss when grazing bottom jellyfish within 15% margin', () => {
-      // Bottom obstacle top edge is at y = 340.
-      // Fish center at y = 325: distance to bottom obstacle is 15px.
-      // Visual radius = 16px (visual penetration = 1px!).
-      // Reduced hitbox radius = 13.6px.
-      // Distance (15) > 13.6 -> player survives!
+    it('grants generous near-miss when grazing the jellyfish dome within 15% margin', () => {
+      // The dome peaks at bottomY + 9 (349). Fish centre at y = 334 with the
+      // full 16px radius reaches y = 350 — a 1px graze of the painted peak.
+      // Reduced hitbox radius 13.6 reaches only 347.6 -> survives.
       fish.x = 130;
-      fish.y = 325;
+      fish.y = 334;
 
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
       expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(true);
@@ -179,12 +177,13 @@ describe('Generous Collision Detection Engine', () => {
 
     it('detects collision when penetration exceeds 15% generous margin', () => {
       // Top kelp: fish is 12px below topHeight, i.e. inside the holdfast bulb.
-      // Bottom jellyfish: fish is 12px above bottomY, inside the 13.6px hitbox.
+      // Bottom jellyfish: fish overlaps the dome peak (349) even with the
+      // reduced 13.6px hitbox.
       fish.x = 130;
       fish.y = 212;
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
 
-      fish.y = 328;
+      fish.y = 338;
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
     });
 
@@ -197,6 +196,35 @@ describe('Generous Collision Detection Engine', () => {
 
       expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
       expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(false);
+    });
+
+    it('grants a near-miss at the drawn jellyfish bell corners', () => {
+      // The painted bell is a dome: its top edge is at bottomY + 9 at centre
+      // and bottomY + 36 at the sides. (102, 343) sits above the unpainted
+      // corner region the old full-width AABB treated as solid.
+      fish.x = 102;
+      fish.y = 343;
+
+      expect(checkFishObstacleCollision(fish, obstacle)).toBe(false);
+      expect(checkFishObstacleCollision(fish, obstacle, 1.0)).toBe(false);
+    });
+
+    it('treats the jellyfish dome centre as solid at the painted top edge', () => {
+      // Centre of the dome peaks at bottomY + 9 (349): the fish overlaps the
+      // painted bell here and must not pass.
+      fish.x = 130;
+      fish.y = 347;
+
+      expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
+    });
+
+    it('keeps the tentacle column solid below the bell rim', () => {
+      // Below the widest point of the bell (bottomY + 36) the jellyfish is a
+      // full-width obstacle down to the seabed.
+      fish.x = 102;
+      fish.y = 400;
+
+      expect(checkFishObstacleCollision(fish, obstacle)).toBe(true);
     });
   });
 });

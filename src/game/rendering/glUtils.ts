@@ -185,9 +185,16 @@ export function createFbo(
 }
 
 /**
+ * Last uploaded canvas dimensions per texture, so a constant-size capture can
+ * reuse the existing texture storage instead of reallocating every frame.
+ */
+const uploadedCanvasSizes = new WeakMap<WebGLTexture, { width: number; height: number }>();
+
+/**
  * Uploads the Canvas 2D capture as an sRGB texture with premultiplied alpha.
  * The pixel-store flags are set on every upload on purpose: premultiplication
- * must never silently flip between frames.
+ * must never silently flip between frames. Same-size uploads use
+ * texSubImage2D; only a real dimension change reallocates storage.
  */
 export function uploadCanvas(
   gl: WebGL2RenderingContext,
@@ -197,13 +204,36 @@ export function uploadCanvas(
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.SRGB8_ALPHA8,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    canvas
-  );
+
+  const previous = uploadedCanvasSizes.get(texture);
+  if (
+    previous &&
+    previous.width === canvas.width &&
+    previous.height === canvas.height
+  ) {
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      canvas
+    );
+  } else {
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.SRGB8_ALPHA8,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      canvas
+    );
+    uploadedCanvasSizes.set(texture, {
+      width: canvas.width,
+      height: canvas.height,
+    });
+  }
+
   gl.bindTexture(gl.TEXTURE_2D, null);
 }

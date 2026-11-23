@@ -33,10 +33,10 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     <div
       data-testid="start-screen"
       onClick={onStart}
-      className="pointer-events-auto absolute inset-0 z-30 flex flex-col items-center justify-between p-6 select-none cursor-pointer"
+      className="pointer-events-auto absolute inset-0 z-30 flex flex-col items-center justify-between px-6 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] select-none cursor-pointer"
     >
       {/* Top Header stats */}
-      <div className="w-full flex items-center justify-between text-xs font-semibold text-slate-300/80 pt-14">
+      <div className="w-full flex items-center justify-between text-xs font-semibold text-slate-300/80 pt-2">
         <div className="flex items-center space-x-1.5 rounded-full bg-slate-900/60 px-3 py-1 border border-slate-700/50 backdrop-blur-sm">
           <span>🏆 Best:</span>
           <span data-testid="start-high-score" className="font-bold text-amber-300">

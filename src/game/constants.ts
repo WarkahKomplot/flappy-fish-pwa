@@ -37,6 +37,12 @@ export const SKIN_DEFINITIONS: Record<SkinId, SkinDefinition> = {
   },
 };
 
+export const MEDAL_THRESHOLDS = {
+  bronze: 10,
+  silver: 25,
+  gold: 50,
+} as const;
+
 export const PHYSICS_CONSTANTS = {
   GRAVITY: 0.38,
   SWIM_IMPULSE: -6.5,
@@ -47,10 +53,22 @@ export const PHYSICS_CONSTANTS = {
   CANVAS_HEIGHT: 640,
   OBSTACLE_WIDTH: 60,
   OBSTACLE_GAP: 140,
+  // Difficulty curve: scroll speed ramps with score up to a cap and the gap
+  // tapers down to a floor, so late-run play stays tense but fair.
+  MIN_OBSTACLE_GAP: 120,
+  GAP_NARROW_PER_POINT: 0.2,
+  MAX_HORIZONTAL_SPEED: 4.2,
+  SPEED_RAMP_PER_POINT: 0.012,
   // Shared by the kelp renderer and the kelp hitbox so the art and collision
   // can never drift apart again (the column is drawn this many px in from
   // each side of the obstacle's nominal width).
   KELP_SIDE_INSET: 8,
+  // Shared by the jellyfish renderer and hitbox: the painted bell is a dome
+  // whose unpulsed height is this many px below bottomY. The hitbox mirrors
+  // the dome (top at bottomY + height/4 at centre, sides at bottomY + height)
+  // instead of a full-width AABB starting at bottomY, which was solid in the
+  // unpainted corners above the bell.
+  JELLY_BELL_HEIGHT: 36,
   OBSTACLE_SPACING: 200,
   HORIZONTAL_SPEED: 2.8,
   PEARL_SPAWN_CHANCE: 0.6,

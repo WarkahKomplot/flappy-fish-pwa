@@ -15,7 +15,6 @@ export const QUALITY_PROFILES: Record<GlTier, QualityProfile> = {
     postDpr: 2,
     maxPostPixels: 2_200_000,
     bloom: true,
-    godRays: true,
     chromaticAberration: true,
     grain: true,
     effects: true,
@@ -28,7 +27,6 @@ export const QUALITY_PROFILES: Record<GlTier, QualityProfile> = {
     postDpr: 1.5,
     maxPostPixels: 2_200_000,
     bloom: true,
-    godRays: false,
     chromaticAberration: false,
     grain: false,
     effects: true,
@@ -41,7 +39,6 @@ export const QUALITY_PROFILES: Record<GlTier, QualityProfile> = {
     postDpr: 1.0,
     maxPostPixels: 2_200_000,
     bloom: false,
-    godRays: false,
     chromaticAberration: false,
     grain: false,
     effects: false,
@@ -70,14 +67,17 @@ export function selectQuality(input: QualityInput): QualityTier {
     return 'high';
   }
 
-  const { hardwareConcurrency } = input;
-  const memory = input.deviceMemory ?? 4;
+  const { hardwareConcurrency, deviceMemory: memory } = input;
 
-  if (hardwareConcurrency >= 8 && memory >= 6) {
+  // deviceMemory is a Chrome-only hint. An unknown value is no signal in
+  // either direction: it must not count toward High or toward Low (the old
+  // `?? 4` / `?? 8` defaults read as contradictory even though they behaved
+  // this way).
+  if (hardwareConcurrency >= 8 && memory !== undefined && memory >= 6) {
     return 'high';
   }
 
-  if (hardwareConcurrency <= 4 || (input.deviceMemory ?? 8) <= 4) {
+  if (hardwareConcurrency <= 4 || (memory !== undefined && memory <= 4)) {
     return 'low';
   }
 

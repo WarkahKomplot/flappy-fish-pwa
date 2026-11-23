@@ -241,6 +241,65 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       const modal = screen.getByTestId('game-over-modal');
       fireEvent.click(modal);
       expect(onRetry).toHaveBeenCalledTimes(2);
+
+      // A tap on the panel body bubbles to the backdrop: exactly one retry,
+      // never the old panel-handler-plus-bubble double fire.
+      fireEvent.click(screen.getByTestId('game-over-panel'));
+      expect(onRetry).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not register its own global keyboard retry handler', () => {
+      const onRetry = vi.fn();
+
+      render(
+        <GameOverModal
+          score={18}
+          highScore={25}
+          runPearls={4}
+          lifetimePearls={80}
+          onRetry={onRetry}
+        />
+      );
+
+      // Keyboard retry is owned by the single app-level input path; a modal
+      // window listener here would double-dispatch with it.
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+      fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it('awards medals at score milestones', () => {
+      const renderModal = (score: number) =>
+        render(
+          <GameOverModal
+            score={score}
+            highScore={score}
+            runPearls={0}
+            lifetimePearls={0}
+            onRetry={vi.fn()}
+          />
+        );
+
+      const { unmount: u1 } = renderModal(5);
+      expect(screen.queryByTestId('medal-badge')).toBeNull();
+      u1();
+
+      const { unmount: u2 } = renderModal(10);
+      expect(screen.getByTestId('medal-badge').getAttribute('data-medal')).toBe(
+        'bronze'
+      );
+      u2();
+
+      const { unmount: u3 } = renderModal(25);
+      expect(screen.getByTestId('medal-badge').getAttribute('data-medal')).toBe(
+        'silver'
+      );
+      u3();
+
+      renderModal(50);
+      expect(screen.getByTestId('medal-badge').getAttribute('data-medal')).toBe(
+        'gold'
+      );
     });
 
     it('does not celebrate a tie as a new best', () => {
@@ -382,14 +441,66 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       fireEvent.click(closeBtn);
       expect(onClose).toHaveBeenCalledTimes(1);
     });
+
+    it('exposes dialog semantics and closes on Escape', () => {
+      const onClose = vi.fn();
+      render(
+        <SkinSelector
+          isOpen={true}
+          onClose={onClose}
+          activeSkin="neon-tetra"
+          lifetimePearls={0}
+          onSelectSkin={vi.fn()}
+        />
+      );
+
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.getAttribute('aria-modal')).toBe('true');
+      // Stage-scoped like FxPanel: fixed would pin to the viewport instead.
+      expect(screen.getByTestId('skin-selector-modal').className).toContain(
+        'absolute'
+      );
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps Tab focus inside the dialog', () => {
+      render(
+        <SkinSelector
+          isOpen={true}
+          onClose={vi.fn()}
+          activeSkin="neon-tetra"
+          lifetimePearls={200}
+          onSelectSkin={vi.fn()}
+        />
+      );
+
+      const dialog = screen.getByRole('dialog');
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>('button:not([disabled])')
+      );
+      expect(focusables.length).toBeGreaterThan(1);
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      last.focus();
+      fireEvent.keyDown(dialog, { key: 'Tab' });
+      expect(document.activeElement).toBe(first);
+
+      first.focus();
+      fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+      expect(document.activeElement).toBe(last);
+    });
   });
 
   describe('GameCanvas Component', () => {
-    it('attaches touchstart and pointerdown with preventDefault to eliminate tap lag', () => {
+    it('forwards stage gestures to a single onTap dispatch with preventDefault', () => {
       const engine = new GameEngine();
       const handleInputSpy = vi.spyOn(engine, 'handleInput');
+      const onTap = vi.fn();
 
-      render(<GameCanvas engine={engine} />);
+      render(<GameCanvas engine={engine} onTap={onTap} />);
 
       const canvas = screen.getByTestId('game-canvas');
       expect(canvas).toBeDefined();
@@ -399,7 +510,7 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       canvas.dispatchEvent(touchEvent);
 
       expect(touchEvent.defaultPrevented).toBe(true);
-      expect(handleInputSpy).toHaveBeenCalled();
+      expect(onTap).toHaveBeenCalledTimes(1);
 
       // Dispatch mouse pointerdown
       const pointerEvent = new Event('pointerdown', { cancelable: true, bubbles: true });
@@ -407,7 +518,44 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       canvas.dispatchEvent(pointerEvent);
 
       expect(pointerEvent.defaultPrevented).toBe(true);
-      expect(handleInputSpy).toHaveBeenCalledTimes(2);
+      expect(onTap).toHaveBeenCalledTimes(2);
+
+      // The app shell owns the engine dispatch; the canvas must not also call
+      // engine.handleInput() or one gesture becomes two.
+      expect(handleInputSpy).not.toHaveBeenCalled();
+    });
+
+    it('ignores auto-repeat keydown and drops all input when disabled', () => {
+      const engine = new GameEngine();
+      const onTap = vi.fn();
+
+      const { rerender } = render(
+        <GameCanvas engine={engine} onTap={onTap} inputEnabled={false} />
+      );
+
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+      fireEvent.keyDown(window, { key: ' ', code: 'Space', repeat: true });
+      expect(onTap).not.toHaveBeenCalled();
+
+      rerender(<GameCanvas engine={engine} onTap={onTap} inputEnabled={true} />);
+      fireEvent.keyDown(window, { key: ' ', code: 'Space', repeat: true });
+      expect(onTap).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+      expect(onTap).toHaveBeenCalledTimes(1);
+    });
+
+    it('dispatches Enter only on game over', () => {
+      const engine = new GameEngine();
+      const onTap = vi.fn();
+
+      render(<GameCanvas engine={engine} onTap={onTap} />);
+
+      fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+      expect(onTap).not.toHaveBeenCalled();
+
+      engine.status = 'gameover';
+      fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+      expect(onTap).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -576,6 +724,77 @@ describe('Flappy Fish UI Overlays & HUD Tests', () => {
       expect(screen.getByTestId('fx-failure-message')).toBeDefined();
       expect(screen.getByTestId('start-screen')).toBeDefined();
       expect(screen.queryByTestId('hud-score')).toBeNull();
+    });
+
+    it('does not start a run while the skin wardrobe is open', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('skins-button'));
+      expect(screen.getByTestId('skin-selector-modal')).toBeDefined();
+
+      // Space with focus on body must not start a run behind the modal.
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+
+      expect(screen.getByTestId('skin-selector-modal')).toBeDefined();
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+      expect(screen.queryByTestId('hud-score')).toBeNull();
+    });
+
+    it('does not start a run while the FX panel is open', () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByTestId('fx-open-button'));
+      expect(screen.getByTestId('fx-panel')).toBeDefined();
+
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+
+      expect(screen.getByTestId('start-screen')).toBeDefined();
+      expect(screen.queryByTestId('hud-score')).toBeNull();
+    });
+
+    it('auto-pauses the run when the page is hidden', () => {
+      render(<App />);
+
+      fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+      expect(screen.queryByTestId('start-screen')).toBeNull();
+      expect(screen.getByTestId('pause-button').getAttribute('aria-label')).toBe(
+        'Pause game'
+      );
+
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'hidden',
+        configurable: true,
+      });
+      fireEvent(document, new Event('visibilitychange'));
+
+      expect(screen.getByTestId('pause-button').getAttribute('aria-label')).toBe(
+        'Resume game'
+      );
+
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        configurable: true,
+      });
+    });
+
+    it('respects safe-area insets and uses dynamic viewport height', () => {
+      const { container } = render(<App />);
+
+      // 100vh overshoots iOS Safari's dynamic toolbar and clips the bottom of
+      // the stage; dvh is exact and the vh class remains the old-browser
+      // fallback (browsers that cannot parse the inline height drop it).
+      const shell = container.firstElementChild as HTMLElement;
+      expect(shell.classList.contains('h-screen')).toBe(true);
+      expect(shell.style.height).toBe('100dvh');
+
+      // Controls must clear the notch/status bar in standalone mode.
+      const hudRoot = screen.getByTestId('hud-root');
+      expect(hudRoot.className).toContain('safe-area-inset-top');
+      expect(hudRoot.className).toContain('safe-area-inset-bottom');
+
+      const startScreen = screen.getByTestId('start-screen');
+      expect(startScreen.className).toContain('safe-area-inset-top');
+      expect(startScreen.className).toContain('safe-area-inset-bottom');
     });
   });
 });

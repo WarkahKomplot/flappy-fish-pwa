@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { GameEngine } from '../src/game/engine';
 import { PHYSICS_CONSTANTS } from '../src/game/constants';
+import { speedForScore, gapForScore } from '../src/game/physics';
 import { ParticleSystem } from '../src/game/entities/particles';
 import {
   renderFish,
@@ -482,6 +483,63 @@ describe('GameEngine 60fps Canvas Orchestrator', () => {
 
       // (720 / 360) * 2 = 4, (1280 / 640) * 2 = 4
       expect(mockCtx.scale).toHaveBeenCalledWith(4, 4);
+    });
+  });
+
+  describe('Difficulty ramp integration', () => {
+    it('scrolls obstacles at the score-scaled speed', () => {
+      engine.status = 'playing';
+
+      const x0 = engine.obstacles[0].x;
+      engine.update(1);
+      expect(x0 - engine.obstacles[0].x).toBeCloseTo(
+        PHYSICS_CONSTANTS.HORIZONTAL_SPEED
+      );
+
+      engine.score = 50;
+      const x1 = engine.obstacles[0].x;
+      engine.update(1);
+      expect(x1 - engine.obstacles[0].x).toBeCloseTo(speedForScore(50));
+    });
+
+    it('spawns new obstacle gaps from the current score taper', () => {
+      engine.status = 'playing';
+      engine.score = 25;
+
+      // Clearing the list forces update() to seed a fresh pair this frame.
+      engine.obstacles = [];
+      engine.update(1);
+
+      expect(engine.obstacles).toHaveLength(1);
+      expect(engine.obstacles[0].gapSize).toBeCloseTo(gapForScore(25));
+    });
+  });
+
+  describe('Frame pipeline failure notification', () => {
+    it('invokes onRenderFailure when the frame pipeline throws', () => {
+      const onRenderFailure = vi.fn();
+      engine.onRenderFailure = onRenderFailure;
+      engine.afterRender = () => {
+        throw new Error('render boom');
+      };
+
+      engine.frame(1);
+
+      // The loop survives (no throw) and the owner is told so it can fall
+      // back instead of leaving a frozen GL canvas on screen.
+      expect(onRenderFailure).toHaveBeenCalledTimes(1);
+      expect(engine.afterRender).toBeUndefined();
+      expect(engine.backgroundVisible).toBe(true);
+    });
+
+    it('does not invoke onRenderFailure on a healthy frame', () => {
+      const onRenderFailure = vi.fn();
+      engine.onRenderFailure = onRenderFailure;
+      engine.afterRender = vi.fn();
+
+      engine.frame(1);
+
+      expect(onRenderFailure).not.toHaveBeenCalled();
     });
   });
 

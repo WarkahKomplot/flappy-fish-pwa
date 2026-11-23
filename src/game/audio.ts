@@ -26,6 +26,32 @@ function getOrCreateAudioContext(): AudioContext | null {
 
 export function resetAudioContextForTesting(): void {
   audioContextInstance = null;
+  noiseBufferCache = null;
+}
+
+/**
+ * The swim swoosh is the hot path (one per tap). The noise buffer is static
+ * per AudioContext, so it is synthesised once and reused.
+ */
+let noiseBufferCache: { ctx: AudioContext; buffer: AudioBuffer } | null = null;
+
+function getNoiseBuffer(ctx: AudioContext): AudioBuffer {
+  if (noiseBufferCache && noiseBufferCache.ctx === ctx) {
+    return noiseBufferCache.buffer;
+  }
+
+  const duration = 0.08;
+  const sampleRate = ctx.sampleRate;
+  const frameCount = Math.floor(sampleRate * duration);
+  const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+  const channelData = buffer.getChannelData(0);
+
+  for (let i = 0; i < frameCount; i++) {
+    channelData[i] = Math.random() * 2 - 1;
+  }
+
+  noiseBufferCache = { ctx, buffer };
+  return buffer;
 }
 
 export async function resumeContext(): Promise<void> {
@@ -58,14 +84,7 @@ export function playSwimFlap(): void {
   try {
     ensureRunningContext(ctx);
     const duration = 0.08;
-    const sampleRate = ctx.sampleRate;
-    const frameCount = Math.floor(sampleRate * duration);
-    const buffer = ctx.createBuffer(1, frameCount, sampleRate);
-    const channelData = buffer.getChannelData(0);
-
-    for (let i = 0; i < frameCount; i++) {
-      channelData[i] = Math.random() * 2 - 1;
-    }
+    const buffer = getNoiseBuffer(ctx);
 
     const noiseSource = ctx.createBufferSource();
     noiseSource.buffer = buffer;
